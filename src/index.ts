@@ -3,8 +3,9 @@ import {generateText, stepCountIs, streamText, type ModelMessage} from 'ai';
 import {createOpenAI} from '@ai-sdk/openai';
 import {createMockModel} from './mock-model';
 import {createInterface} from 'node:readline';
-import {weatherTool, calculatorTool} from './tools/utility-tools';
+import {ToolRegistry} from './tools/tool-registry';
 import {agentLoop, type BudgetState} from './agent-loop';
+import {allTools} from './tools/index';
 
 const qwen = createOpenAI({
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
@@ -14,12 +15,11 @@ const qwen = createOpenAI({
 const model = process.env.DASHSCOPE_API_KEY
   ? qwen.chat('qwen-plus-latest')
   : createMockModel();
-const tools = {get_weather: weatherTool, calculator: calculatorTool};
 
-const rl = createInterface({
-  input: process.stdin,
-  output: process.stdout,
-});
+const tools = new ToolRegistry();
+tools.register(...allTools);
+console.log(`已注册 ${tools.getAll().length} 个工具：`);
+
 const messages: ModelMessage[] = [];
 // 预算由调用方持有，跨轮持续累计——agentLoop 只负责消费它
 const budget: BudgetState = {used: 0, limit: 1500};
@@ -32,6 +32,10 @@ const SYSTEM = `你是 Super Agent，一个有工具调用能力的 AI 助手。
 1. 用户说"测试死循环" → 每次都返回工具调用 get_weather({"city":"北京"})
 2. 用户说"测试重试" → 抛出 429 错误`;
 
+const rl = createInterface({
+  input: process.stdin,
+  output: process.stdout,
+});
 function ask() {
   rl.question('\nYou: ', async (input) => {
     const trimmed = input.trim();
