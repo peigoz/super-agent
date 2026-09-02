@@ -1,9 +1,11 @@
 // 工具的 description 和 inputSchema 里的属性 description，本质上就是在写 prompt。 
 // 写得越清楚、越具体，模型调用的准确率就越高。"查天气"不如"查询指定城市的实时天气信息，包括温度、风向等"
 import {readFileSync, writeFileSync, readdirSync, statSync, globSync, existsSync} from 'node:fs';
-import {join, relative, resolve} from 'node:path';
+import {join, relative, resolve, sep} from 'node:path';
 import type {ToolDefinition} from './tool-registry.js';
 import {execSync} from 'node:child_process';
+import {createServer, type Server} from 'node:http';
+import {lookup} from 'mrmime';
 
 export const weatherTool: ToolDefinition = {
   name: 'get_weather',
@@ -308,8 +310,112 @@ export const bashTool: ToolDefinition = {
   },
 };
 
+export const fetchUrlTool: ToolDefinition = {
+  name: 'fetch_url',
+  description: '抓取指定 URL 的网页内容并转换为纯文本（自动剥离 HTML 标签）',
+  parameters: {
+    type: 'object',
+    properties: {
+      url: {type: 'string', description: '完整 URL，必须以 http:// 或 https:// 开头'},
+    },
+    required: [ 'url' ],
+    additionalProperties: false,
+  },
+  isConcurrencySafe: true,    // 只读、可并发——抓多个 URL 时直接并行
+  isReadOnly: true,
+  maxResultChars: 1500,        // 网页通常很长，截断兜底
+  execute: async ({url}: {url: string}) => {
+    try {
+      const res = await fetch(url, {
+        headers: {'User-Agent': 'Mozilla/5.0 SuperAgent'},
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!res.ok) return `请求失败：HTTP ${res.status}`;
+      const html = await res.text();
+      return html
+        .replace(/<script[\s\S]*?<\/script>/gi, '')
+        .replace(/<style[\s\S]*?<\/style>/gi, '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim() || '页面无文本内容';
+    } catch (err: any) {
+      return `抓取失败：${err.message}`;
+    }
+  },
+};
 
+let previewServer: Server | null = null;
+
+export const startPreviewTool: ToolDefinition = {
+  name: 'start_preview',
+  description: '启动 app/ 目录的预览服务器。生成应用文件后必须立即调用此工具',
+  parameters: {
+    type: 'object',
+    properties: {port: {type: 'number'}},
+    required: [],
+    additionalProperties: false,
+  },
+  isConcurrencySafe: false,
+  isReadOnly: false,
+  execute: async ({port = 8080}: {port?: number} = {}) => {
+    if (previewServer) return `预览服务器已在运行 → http://localhost:${port}`;
+    const root = resolve('app');
+    if (!existsSync(root)) return '错误：app/ 目录不存在';
+
+    previewServer = createServer((req, res) => {
+      const send = (status: number, body?: Buffer | string, type?: string) => {
+        const headers: Record<string, string> = {
+          'Cache-Control': 'no-cache',
+          'X-Content-Type-Options': 'nosniff',
+        };
+        if (type) headers[ 'Content-Type' ] = type;
+        res.writeHead(status, headers);
+        res.end(req.method === 'HEAD' ? undefined : body);
+      };
+
+      // 1. 解析并解码 URL（decodeURIComponent 抛错 → 400）
+      let pathname: string;
+      try {
+        pathname = decodeURIComponent(new URL(req.url ?? '/', 'http://localhost').pathname);
+      } catch {
+        send(400, 'Bad Request', 'text/plain; charset=utf-8');
+        return;
+      }
+
+      // 2. 目录请求指向 index.html；. 前缀防 resolve 把绝对路径解析到 root 外
+      const rel = pathname.endsWith('/') ? pathname + 'index.html' : pathname;
+      const filePath = resolve(root, '.' + rel);
+
+      // 3. 防目录穿越：解析结果必须仍在 root 内
+      if (filePath !== root && !filePath.startsWith(root + sep)) {
+        send(403, 'Forbidden', 'text/plain; charset=utf-8');
+        return;
+      }
+
+      // 4. 读文件 → 404
+      let data: Buffer;
+      try {
+        data = readFileSync(filePath);
+      } catch {
+        send(404, 'Not Found', 'text/plain; charset=utf-8');
+        return;
+      }
+
+      // 5. MIME：mrmime 精简查找表（常见类型，打包后 ~3KB），用法与 sirv 一致
+      //    未知类型 lookup 返回 undefined，退回 octet-stream
+      const type = lookup(filePath);
+      send(200, data, type || 'application/octet-stream');
+    });
+
+    return new Promise<string>((resolvePromise) => {
+      previewServer!.listen(port, () => {
+        resolvePromise(`✓ 预览服务器已启动 → http://localhost:${port}`);
+      });
+    });
+  },
+};
 
 export const allTools: ToolDefinition[] = [
-  weatherTool, calculatorTool, readFileTool, writeFileTool, editFileTool, listDirectoryTool, globTool, grepTool, bashTool,
+  weatherTool, calculatorTool, readFileTool, writeFileTool, editFileTool,
+  listDirectoryTool, globTool, grepTool, bashTool, fetchUrlTool, startPreviewTool
 ];
