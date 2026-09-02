@@ -415,6 +415,10 @@ export const startPreviewTool: ToolDefinition = {
   },
 };
 
+// Claude Code 提供的 30+ 工具集，部分标记了 shouldDefer: true 懒加载。通过 ToolSearch 返回匹配工具的完整 Schema 定义
+// 核心工具：Read、Edit、Write、Bash、Grep、Glob、Agent、Skill——这些几乎每次对话都要用，永远加载。
+// 低频工具**：WebSearch、WebFetch、NotebookEdit、LSP、Cron、Task 管理、Plan Mode、Config——增加 shouldDefer 标记。
+
 export const allTools: ToolDefinition[] = [
   weatherTool, calculatorTool, readFileTool, writeFileTool, editFileTool,
   listDirectoryTool, globTool, grepTool, bashTool, fetchUrlTool, startPreviewTool
