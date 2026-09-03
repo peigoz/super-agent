@@ -6,6 +6,7 @@ import type {ToolDefinition} from './tool-registry.js';
 import {execSync} from 'node:child_process';
 import {createServer, type Server} from 'node:http';
 import {lookup} from 'mrmime';
+import {pickSearchTool, webFetchTool} from './search-tools.js';
 
 export const weatherTool: ToolDefinition = {
   name: 'get_weather',
@@ -421,5 +422,6 @@ export const startPreviewTool: ToolDefinition = {
 
 export const allTools: ToolDefinition[] = [
   weatherTool, calculatorTool, readFileTool, writeFileTool, editFileTool,
-  listDirectoryTool, globTool, grepTool, bashTool, fetchUrlTool, startPreviewTool
+  listDirectoryTool, globTool, grepTool, bashTool, fetchUrlTool, startPreviewTool,
+  pickSearchTool(), webFetchTool,
 ];
