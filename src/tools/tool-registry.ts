@@ -1,4 +1,5 @@
 import {jsonSchema} from 'ai';
+import type {MCPClient, MockMCPClient} from '../mcp-client';
 
 export interface ToolDefinition {
   name: string;
@@ -104,6 +105,51 @@ export class ToolRegistry {
       };
     }
     return result;
+  }
+
+  private mcpClients: Array<MCPClient | MockMCPClient> = [];
+
+  async registerMCPServer(
+    serverName: string,
+    client: MCPClient | MockMCPClient,
+  ): Promise<string[]> {
+    await client.connect();
+    this.mcpClients.push(client);
+
+    const tools = await client.listTools();
+    const registered: string[] = [];
+
+    for (const tool of tools) {
+      // 增加命名空间前缀，避免同名工具冲突
+      const prefixedName = `mcp__${serverName}__${tool.name}`;
+      if (this.tools.has(prefixedName)) continue;
+
+      const toolClient = client;
+      const originalName = tool.name;
+
+      this.register({
+        name: prefixedName,
+        description: `[MCP:${serverName}] ${tool.description}`, // 增加MCP前缀，便于调试时查看日志。区分是内置工具的问题还是 MCP Server 的问题
+        parameters: tool.inputSchema as Record<string, unknown>,
+        isConcurrencySafe: true,
+        isReadOnly: true,
+        maxResultChars: 3000,
+        execute: async (input: any) => {
+          return toolClient.callTool(originalName, input);
+        },
+      });
+
+      registered.push(prefixedName);
+    }
+
+    return registered;
+  }
+
+  async closeAllMCP(): Promise<void> {
+    for (const client of this.mcpClients) {
+      await client.close();
+    }
+    this.mcpClients = [];
   }
 }
 
