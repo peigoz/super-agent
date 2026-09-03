@@ -10,6 +10,8 @@ export interface ToolDefinition {
   // 元数据——给 Agent Loop 做决策用
   isConcurrencySafe?: boolean;  // 能否并行,并发安全性不是按工具名决定的，而是按行为决定的
   isReadOnly?: boolean;         // 是否只读
+  shouldDefer?: boolean;    // 是否延迟加载
+  searchHint?: string;      // 搜索提示词，帮助 ToolSearch 匹配
   maxResultChars?: number;      // 结果最大长度
 }
 
@@ -22,6 +24,12 @@ export class ToolRegistry {
   private exclusiveLock = false;          // 当前是否有独占锁持有者
   private concurrentCount = 0;            // 当前共享锁持有数
   private waitQueue: Array<() => void> = [];  // 阻塞等待中的 resolve 函数
+
+  // MCP 客户端列表，注册 MCP Server 时会把客户端存起来，方便统一关闭
+  private mcpClients: Array<MCPClient | MockMCPClient> = [];
+
+  // 工具懒加载
+  private discoveredTools = new Set<string>();
 
   register(...tools: ToolDefinition[]): void {
     for (const tool of tools) {
@@ -71,7 +79,8 @@ export class ToolRegistry {
 
   toAISDKFormat(): Record<string, any> {
     const result: Record<string, any> = {};
-    for (const [ name, tool ] of this.tools) {
+    const tools = this.getActiveTools().map(t => [ t.name, t ] as const);
+    for (const [ name, tool ] of tools) {
       const maxChars = tool.maxResultChars;
       const executeFn = tool.execute;
       const isSafe = tool.isConcurrencySafe === true;
@@ -107,8 +116,29 @@ export class ToolRegistry {
     return result;
   }
 
-  private mcpClients: Array<MCPClient | MockMCPClient> = [];
+  countTokenEstimate(): {active: number; deferred: number; total: number} {
+    let active = 0;
+    let deferred = 0;
 
+    for (const tool of this.tools.values()) {
+      const schemaSize = JSON.stringify({
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+      }).length;
+      const tokens = Math.ceil(schemaSize / 4);
+
+      if (tool.shouldDefer && !this.discoveredTools.has(tool.name)) {
+        deferred += tokens;
+      } else {
+        active += tokens;
+      }
+    }
+
+    return {active, deferred, total: active + deferred};
+  }
+
+  /** Start ----MCP 注册---- Start */
   async registerMCPServer(
     serverName: string,
     client: MCPClient | MockMCPClient,
@@ -133,6 +163,8 @@ export class ToolRegistry {
         parameters: tool.inputSchema as Record<string, unknown>,
         isConcurrencySafe: true,
         isReadOnly: true,
+        shouldDefer: true,
+        searchHint: `${serverName} ${tool.name} ${tool.description}`,
         maxResultChars: 3000,
         execute: async (input: any) => {
           return toolClient.callTool(originalName, input);
@@ -151,6 +183,56 @@ export class ToolRegistry {
     }
     this.mcpClients = [];
   }
+  /** End ----MCP 注册---- End */
+
+  /** Start ----工具延迟加载---- Start */
+  // 更激进的方案：ToolSearch + CallTool 双工具代理模式：
+  // tools 列表里永远只有 tool_search 和 call_tool 两个元工具， 模型先搜索获取 Schema，再通过 call_tool 转发执行，
+  // 应用层根据 tool_name 路由到真正的工具实现。这样工具列表从头到尾不变，cache 完全稳定。
+  // 代价是模型不是通过 tools 参数里的结构化 Schema 来"认识"工具的，而是通过对话历史里的文本描述来理解参数格式，参数复杂的工具准确率会略低一些。
+  getActiveTools(): ToolDefinition[] {
+    return this.getAll().filter(tool => {
+      if (tool.shouldDefer && !this.discoveredTools.has(tool.name)) {
+        return false;
+      }
+      return true;
+    });
+  }
+
+  searchTools(query: string): ToolDefinition[] {
+    const q = query.trim();
+    const results: ToolDefinition[] = [];
+
+    const names = q.includes(',')
+      ? q.split(',').map(n => n.trim()).filter(Boolean)
+      : [ q ];
+
+    for (const name of names) {
+      const tool = this.tools.get(name);
+      if (tool && tool.name !== 'tool_search') {
+        results.push(tool);
+        this.discoveredTools.add(tool.name);
+      }
+    }
+    return results;
+  }
+
+  // 所有延迟工具的 Schema 定义不用常驻 prompt
+  getDeferredToolSummary(): string {
+    const deferred = this.getAll().filter(tool => {
+      return tool.shouldDefer && !this.discoveredTools.has(tool.name);
+    });
+
+    if (deferred.length === 0) return '';
+
+    const lines = deferred.map(t => {
+      const hint = t.searchHint ? ` — ${t.searchHint}` : '';
+      return `  - ${t.name}${hint}`;
+    });
+
+    return `\n以下工具可用，但需要先通过 tool_search 搜索获取完整定义：\n${lines.join('\n')}`;
+  }
+  /** End ----延迟加载---- End */
 }
 
 export function truncateResult(text: string, maxChars: number = DEFAULT_MAX_RESULT_CHARS): string {
