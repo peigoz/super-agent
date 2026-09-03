@@ -56,8 +56,9 @@ function ask() {
 }
 
 console.log('Super Agent (type "exit" to quit)\n');
-console.log('三个推荐 demo：');
+console.log('demo：');
 console.log('  1. 找出项目里所有 TODO');
 console.log('  2. 去 https://ai-sdk.dev/docs/ai-sdk-core/tools-and-tool-calling 看下文档总结');
 console.log('  3. 做一个待办清单的网页应用\n');
+console.log('  4. 帮我查下oxc的最新动态\n');
 ask();
