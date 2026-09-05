@@ -1,0 +1,2 @@
+{"type":"message","timestamp":"2026-09-05T18:14:18.823Z","message":{"role":"user","content":"你是谁？"}}
+{"type":"message","timestamp":"2026-09-05T18:14:22.360Z","message":{"role":"assistant","content":[{"type":"text","text":"我是 Super Agent，一个能搜索互联网、读写代码的 AI 助手。我可以：\n\n- ✅ 用 `web_search` 和 `web_fetch` 获取最新网络信息  \n- ✅ 读取、编辑、创建文件（支持精确替换、通配符搜索等）  \n- ✅ 运行 shell 命令、执行计算、查天气等  \n- ✅ 调用 GitHub 工具（如创建仓库、PR、Issue 等）——需时会先用 `tool_search` 加载定义  \n\n需要帮你查资料、写代码、调试、自动化任务，尽管说 👇"}]}}
