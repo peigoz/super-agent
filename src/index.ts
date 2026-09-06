@@ -1,15 +1,15 @@
 import 'dotenv/config';
-import {generateText, stepCountIs, streamText, type ModelMessage} from 'ai';
+import {generateText, stepCountIs, streamText, type LanguageModel, type ModelMessage} from 'ai';
 import {createOpenAI} from '@ai-sdk/openai';
 import {createMockModel} from './mock-model';
 import {createInterface} from 'node:readline';
 import {ToolRegistry, type ToolDefinition} from './tools/tool-registry';
 import {agentLoop, type BudgetState} from './agent/loop';
 import {allTools} from './tools/index';
-import {pickSystem} from './context/prompt';
 import {MCPClient, MockMCPClient} from './mcp-client';
 import {SessionStore} from './session/store';
 import {coreRules, deferredTools, PromptBuilder, sessionContext, toolGuide, type PromptContext} from './context/prompt-builder';
+import {estimateTokens, microcompact, summarize} from './context/compressor';
 
 const toolSearchTool: ToolDefinition = {
   name: 'tool_search',
@@ -97,12 +97,12 @@ async function main() {
   // 预算由调用方持有，跨轮持续累计——agentLoop 只负责消费它
   const budget: BudgetState = {used: 0, limit: 15000};
 
-
   // Session 持久化
   const isContinue = process.argv.includes('--continue');
   const sessionId = 'default';
   const store = new SessionStore('default');
 
+  let summary = '';
   let messages: ModelMessage[] = [];
   if (isContinue && store.exists()) {
     messages = store.load();
@@ -110,6 +110,9 @@ async function main() {
   } else {
     console.log(`\n[Session] 新会话`);
   }
+
+  // 启动时压缩检查
+  summary = await compresssor(model, messages, summary, isContinue);
 
   // Prompt Pipe 组装 system prompt
   // 保持 prompt 前缀不变，计算结果就能复用。不变的 section 放前面，变的放后面：
@@ -157,6 +160,9 @@ async function main() {
       const newMessages = messages.slice(beforeLen);
       store.appendAll(newMessages);
 
+      // 每轮对话后压缩检查
+      summary = await compresssor(model, messages, summary, false);
+
       ask();
     });
   }
@@ -173,6 +179,28 @@ async function main() {
 }
 
 main().catch(console.error);
+
+async function compresssor(model: any, messages: ModelMessage[], summary: string, isContinue: boolean): Promise<string> {
+  // Check if compaction needed after each turn
+  const currentTokens = estimateTokens(messages);
+  if (currentTokens > 4000) {
+    if (isContinue) console.log(`\n  ==== [历史对话启动压缩检查] ====`);
+    console.log(`\n  [压缩检查] ~${currentTokens} tokens, 触发压缩...`);
+    const mc2 = microcompact(messages);
+    messages = mc2.messages;
+    if (mc2.cleared > 0) console.log(`  [Microcompact] 清理了 ${mc2.cleared} 个工具结果`);
+
+    const comp2 = await summarize(model, messages, summary);
+    if (comp2.compressedCount > 0) {
+      messages = comp2.messages;
+      summary = comp2.summary;
+      console.log(`  [Summarization] 压缩了 ${comp2.compressedCount} 条消息, ~${estimateTokens(messages)} tokens`);
+    }
+
+    if (isContinue) console.log(`  ==== [历史对话压缩完成] ====`);
+  }
+  return summary;
+}
 
 function toolsRepoter() {
   console.log(`已注册 ${registry.getAll().length} 个工具：`);
