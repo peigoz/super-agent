@@ -2,9 +2,12 @@ import {type ModelMessage, streamText} from "ai";
 import {detect, recordCall, recordResult, resetHistory} from '../agent/loop-detection';
 import {isRetryable, calculateDelay, sleep} from './retry';
 import type {ToolRegistry} from "../tools/tool-registry";
+import type {TokenTracker} from "../context/defense";
 
 const MAX_STEPS = 10;
 const MAX_RETRIES = 3;
+
+const TOKEN_BUDGET = 15000;
 
 export interface BudgetState {
   used: number;
@@ -16,7 +19,7 @@ export async function agentLoop(
   registry: ToolRegistry,
   messages: ModelMessage[],
   system: string,
-  budget: BudgetState
+  tracker: TokenTracker,
 ) {
   let step = 0;
   resetHistory();
@@ -73,7 +76,6 @@ export async function agentLoop(
           }
         }
 
-
         const finalStep = await result.finalStep;
         stepResponse = finalStep.response;
         stepUsage = finalStep.usage;
@@ -95,19 +97,22 @@ export async function agentLoop(
       break;
     }
 
-    // 拿到这一步的完整结果，追加到消息历史
-    messages.push(...stepResponse.messages);
-
-
     // Token 预算追踪：budget 由调用方持有，跨轮持续累计
     const inp = stepUsage.inputTokens ?? 0;
     const out = stepUsage.outputTokens ?? 0;
-    budget.used = stepUsage.totalTokens ? stepUsage.totalTokens : (inp + out);
+    if (inp > 0) tracker.updateFromAPI(inp);
 
-    const pct = Math.round(budget.used / budget.limit * 100);
-    console.log(`  [Token] ${budget.used}/${budget.limit} (${pct}%)`);
-    if (budget.used > budget.limit) {
-      console.log('\n[Token 预算耗尽，强制停止]');
+
+    // 拿到这一步的完整结果，追加到消息历史
+    messages.push(...stepResponse.messages);
+    tracker.addMessages(stepResponse.messages);
+
+    const totalTokens = stepUsage.totalTokens ? stepUsage.totalTokens : (inp + out);
+    const pct = Math.round(totalTokens / TOKEN_BUDGET * 100);
+    console.log(`  [Token] ${totalTokens}/${TOKEN_BUDGET} (${pct}%)`);
+
+    if (totalTokens > TOKEN_BUDGET) {
+      console.log('\n[Token 预算耗尽]');
       break;
     }
 

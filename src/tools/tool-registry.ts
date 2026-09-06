@@ -1,5 +1,5 @@
 import {jsonSchema} from 'ai';
-import type {MCPClient, MockMCPClient} from '../mcp-client';
+import type {MCPClient, MockMCPClient} from './mcp-client';
 
 export interface ToolDefinition {
   name: string;

@@ -1,5 +1,5 @@
 /**
- * Mock Model v0.4.2 — Mini Apps
+ * Mock Model v4 — Mini Apps
  *
  * 在 sa-04b 基础上新增三个 demo 场景：
  * 1. 代码分析 Agent：list_directory + grep 找出项目所有 TODO/FIXME，最后给出归类总结
