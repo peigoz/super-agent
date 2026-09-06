@@ -2,3 +2,4 @@
 node_modules
 app/*
 !app/index.html
+.sessions

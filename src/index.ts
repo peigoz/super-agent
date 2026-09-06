@@ -9,6 +9,7 @@ import {allTools} from './tools/index';
 import {pickSystem} from './context/prompt';
 import {MCPClient, MockMCPClient} from './mcp-client';
 import {SessionStore} from './session/store';
+import {coreRules, deferredTools, PromptBuilder, sessionContext, toolGuide, type PromptContext} from './context/prompt-builder';
 
 const toolSearchTool: ToolDefinition = {
   name: 'tool_search',
@@ -95,10 +96,11 @@ async function main() {
 
   // 预算由调用方持有，跨轮持续累计——agentLoop 只负责消费它
   const budget: BudgetState = {used: 0, limit: 15000};
-  const SYSTEM = pickSystem({type: 'web_search', deferredTools: registry.getDeferredToolSummary()});
+
 
   // Session 持久化
   const isContinue = process.argv.includes('--continue');
+  const sessionId = 'default';
   const store = new SessionStore('default');
 
   let messages: ModelMessage[] = [];
@@ -108,6 +110,31 @@ async function main() {
   } else {
     console.log(`\n[Session] 新会话`);
   }
+
+  // Prompt Pipe 组装 system prompt
+  // 保持 prompt 前缀不变，计算结果就能复用。不变的 section 放前面，变的放后面：
+  // coreRules — 永远不变，放最前面，cache 稳稳命中。
+  // toolGuide — 工具数量基本固定，变化很少。
+  // deferredTools — 所有的工具列表也基本固定，放中间。
+  // sessionContext — 每次启动都不同，放最后面。
+  const builder = new PromptBuilder()
+    .pipe('coreRules', coreRules())
+    .pipe('toolGuide', toolGuide())
+    .pipe('deferredTools', deferredTools())
+    .pipe('sessionContext', sessionContext());
+
+  const promptCtx: PromptContext = {
+    toolCount: registry.getActiveTools().length,
+    deferredToolSummary: registry.getDeferredToolSummary(),
+    sessionMessageCount: messages.length,
+    sessionId,
+  };
+
+  const SYSTEM = builder.build(promptCtx);
+  // const SYSTEM = pickSystem({type: 'web_search', deferredTools: registry.getDeferredToolSummary()});
+
+  // Debug: 显示 Prompt Pipe 各模块状态
+  builder.debug(promptCtx);
 
   function ask() {
     rl.question('\nYou: ', async (input) => {
