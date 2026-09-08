@@ -11,6 +11,20 @@ import {SessionStore} from './session/store';
 import {coreRules, deferredTools, PromptBuilder, sessionContext, toolGuide, type PromptContext} from './context/prompt-builder';
 import {estimateTokens, microcompact, summarize} from './context/compressor';
 import {applyDefense, estimateMessageTokens, TokenTracker, truncateToolResults, ttlPrune} from './context/defense';
+import {UsageTracker} from './usage/tracker.js';
+import {buildContextSnapshot, renderContextView} from './context/view';
+
+const qwen = createOpenAI({
+  baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  apiKey: process.env.DASHSCOPE_API_KEY,
+});
+
+const model = process.env.DASHSCOPE_API_KEY
+  ? qwen.chat('qwen-plus-latest')
+  : createMockModel();
+
+const registry = new ToolRegistry();
+registry.register(...allTools);
 
 const toolSearchTool: ToolDefinition = {
   name: 'tool_search',
@@ -35,10 +49,7 @@ const toolSearchTool: ToolDefinition = {
     }));
   },
 };
-
-const registry = new ToolRegistry();
 registry.register(toolSearchTool);
-registry.register(...allTools);
 
 async function connectMCP() {
   const githubToken = process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
@@ -81,20 +92,6 @@ async function main() {
 
   toolsRepoter();
 
-  const qwen = createOpenAI({
-    baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    apiKey: process.env.DASHSCOPE_API_KEY,
-  });
-
-  const model = process.env.DASHSCOPE_API_KEY
-    ? qwen.chat('qwen-plus-latest')
-    : createMockModel();
-
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-
   // Session 持久化
   const isContinue = process.argv.includes('--continue');
   const sessionId = 'default';
@@ -109,9 +106,8 @@ async function main() {
     console.log(`\n[Session] 新会话`);
   }
 
+  const tracker = new UsageTracker('.usage/today.jsonl');
   const timestamps = new Map<number, number>();
-  const tracker = new TokenTracker();
-  tracker.addMessages(messages);
 
   // 启动时压缩检查，替换为 tools 三层即时防线压缩。目的降低 LLM 压缩频率，节省费用和时间
   // summary = await compresssor(model, messages, summary, isContinue);
@@ -121,7 +117,7 @@ async function main() {
   messages = defense.messages;
   console.log(`[防线后] ${messages.length} 条消息, ~${defense.tokenEstimate} tokens (节省 ${beforeTokens - defense.tokenEstimate})`);
   // 更新 token 预算
-  tracker.replaceMessages(messages, defense.messages);
+  // tracker.replaceMessages(messages, defense.messages);
   console.log(`====================\n`);
 
   // Prompt Pipe 组装 system prompt
@@ -142,12 +138,15 @@ async function main() {
     sessionMessageCount: messages.length,
     sessionId,
   };
-
-  const SYSTEM = builder.build(promptCtx);
   // const SYSTEM = pickSystem({type: 'web_search', deferredTools: registry.getDeferredToolSummary()});
-
+  const SYSTEM = builder.build(promptCtx);
   // Debug: 显示 Prompt Pipe 各模块状态
   builder.debug(promptCtx);
+
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
 
   function ask() {
     rl.question('\nYou: ', async (input) => {
@@ -158,15 +157,18 @@ async function main() {
         return;
       }
 
+      if (handleCommandTrigger(trimmed, {system: SYSTEM, messages})) {
+        ask()
+        return
+      }
+
       const userMsg: ModelMessage = {role: 'user', content: trimmed};
       messages.push(userMsg);
-      tracker.addMessage(userMsg);
       timestamps.set(messages.length - 1, Date.now());
       store.append(userMsg);
 
       // 每次模型执行前都调用 Tools 压缩，降低 LLM 压缩摘要触发频率
       const turnDefense = applyDefense(messages, timestamps);
-      tracker.replaceMessages(messages, turnDefense.messages);
       messages = turnDefense.messages;
 
       const beforeLen = messages.length;
@@ -175,19 +177,17 @@ async function main() {
 
       // 持久化本轮新增的消息（agent loop 会往 messages 里 push assistant/tool 消息）
       const newMessages = messages.slice(beforeLen);
-      store.appendAll(newMessages);
-
-      // 记录本轮新增消息的时间戳
       const now = Date.now();
       for (let i = beforeLen; i < messages.length; i++) {
         timestamps.set(i, now);
       }
+      store.appendAll(newMessages);
 
       // 每轮对话后 LLM 压缩检查，作为三层防线的兜底，压缩（user/assistant 消息）
       summary = await compresssor(model, messages, summary, false);
 
-      const status = tracker.status;
-      console.log(`  [Token] ~${status.tokens} tokens (${status.percent}%)`);
+      const status = estimateMessageTokens(messages);
+      console.log(`  [Token] ~${status} tokens`);
 
       ask();
     });
@@ -201,6 +201,7 @@ async function main() {
   console.log('  4. 帮我查下oxc的最新动态\n');
   console.log('  5. 帮我查下 vercel/ai 仓库的 star 数量\n');
 
+  handleCommandTrigger('context', {system: SYSTEM, messages})
   ask();
 }
 
@@ -228,6 +229,26 @@ async function compresssor(model: any, messages: ModelMessage[], summary: string
     if (isContinue) console.log(`  ==== [历史对话压缩完成] ====`);
   }
   return summary;
+}
+
+function handleCommandTrigger(cmd: string, {system, messages}: {system: string, messages: ModelMessage[]}) {
+  // /context: 终端可视化的 context 占用，参考 Claude Code 的 /context
+  if (cmd === '/context' || cmd === 'context') {
+    const snapshot = buildContextSnapshot({
+      modelName: process.env.DASHSCOPE_API_KEY ? 'Qwen Plus' : 'Mock Model (开发用)',
+      modelId: process.env.DASHSCOPE_API_KEY ? 'qwen3-6-plus' : 'mock-model',
+      windowTokens: 1_000_000,
+      systemPromptChars: system.length,
+      toolDescriptionChars: registry.getActiveTools().reduce((a, t) => a + t.name.length + (t.description?.length || 0) + JSON.stringify(t.parameters || {}).length, 0),
+      memoryChars: 0,
+      skillsChars: 0,
+      messages,
+    });
+    console.log(renderContextView(snapshot));
+    return true;
+  }
+
+  return false;
 }
 
 function toolsRepoter() {

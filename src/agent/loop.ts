@@ -2,7 +2,8 @@ import {type ModelMessage, streamText} from "ai";
 import {detect, recordCall, recordResult, resetHistory} from '../agent/loop-detection';
 import {isRetryable, calculateDelay, sleep} from './retry';
 import type {ToolRegistry} from "../tools/tool-registry";
-import type {TokenTracker} from "../context/defense";
+import {type UsageTracker, normalizeUsage} from '../usage/tracker.js';
+
 
 const MAX_STEPS = 10;
 const MAX_RETRIES = 3;
@@ -19,7 +20,7 @@ export async function agentLoop(
   registry: ToolRegistry,
   messages: ModelMessage[],
   system: string,
-  tracker: TokenTracker,
+  tracker: UsageTracker,
 ) {
   let step = 0;
   resetHistory();
@@ -97,15 +98,22 @@ export async function agentLoop(
       break;
     }
 
+    // 拿到这一步的完整结果，追加到消息历史
+    messages.push(...stepResponse.messages);
+
     // Token 预算追踪：budget 由调用方持有，跨轮持续累计
     const inp = stepUsage.inputTokens ?? 0;
     const out = stepUsage.outputTokens ?? 0;
-    if (inp > 0) tracker.updateFromAPI(inp);
 
+    const norm = normalizeUsage(stepUsage);
+    const stepRecord = tracker?.record(model?.modelId || 'mock-model', norm);
 
-    // 拿到这一步的完整结果，追加到消息历史
-    messages.push(...stepResponse.messages);
-    tracker.addMessages(stepResponse.messages);
+    // cache 命中时才打印一行简洁状态，让 cache hit 立刻可见
+    if (stepRecord && (norm.cacheReadTokens > 0 || norm.cacheWriteTokens > 0)) {
+      const tag = norm.cacheReadTokens > 0 ? `\x1b[38;5;36m✓ cache hit\x1b[0m` : `\x1b[38;5;220m✎ cache write\x1b[0m`;
+      const detail = norm.cacheReadTokens > 0 ? `read ${norm.cacheReadTokens}` : `write ${norm.cacheWriteTokens}`;
+      console.log(`  [${tag}] ${detail} tokens · 本步 $${stepRecord.cost.toFixed(5)}`);
+    }
 
     const totalTokens = stepUsage.totalTokens ? stepUsage.totalTokens : (inp + out);
     const pct = Math.round(totalTokens / TOKEN_BUDGET * 100);
