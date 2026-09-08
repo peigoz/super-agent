@@ -1,155 +1,127 @@
-import type {ToolDefinition} from './tool-registry.js';
-import TurndownService from 'turndown';
 
-// ── Tavily（自动挡）──────────────────────────────
-// 维度	            Serper	           Tavily
-// 免费额度	         2,500 次/月	     1,000 次/月
-// 价格	            $0.30-1/1K       	$5-8/1K
-// 延迟	            200-500ms	         1-2s
-// 返回内容	        snippet（网页摘要）	提取文本（完整内容）
-// 需要 web_fetch	   是	                  否
-export const tavilySearchTool: ToolDefinition = {
-  name: 'web_search',
-  description: '搜索互联网获取最新信息。返回相关网页的标题、链接和内容摘要',
-  parameters: {
-    type: 'object',
-    properties: {
-      query: {type: 'string', description: '搜索关键词'},
-      max_results: {type: 'number', description: '返回结果数量，默认 5'},
-    },
-    required: [ 'query' ],
-  },
-  isConcurrencySafe: true,
-  isReadOnly: true,
-  maxResultChars: 3000,
-  execute: async ({query, max_results = 5}: {query: string; max_results?: number}) => {
-    const apiKey = process.env.TAVILY_API_KEY;
-    if (!apiKey) return '[web_search] 未配置 TAVILY_API_KEY，请在 .env 中设置';
 
-    const res = await fetch('https://api.tavily.com/search', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        api_key: apiKey,
-        query,
-        max_results,
-        include_answer: true,
-      }),
-    });
+import {statSync, globSync, readFileSync, readdirSync} from "fs";
+import {join, relative, resolve} from "path";
+import type {ToolDefinition} from "./tool-registry";
 
-    if (!res.ok) return `[web_search] 请求失败: HTTP ${res.status}`;
+// Node 24 原生 glob 封装（替代 fast-glob）
+// 注意：@types/node 里 fs.globSync 的 exclude 回调类型标注为 Dirent，但 Node 24 运行时实际传入的是相对路径字符串，
 
-    const data = await res.json() as any;
-    const lines: string[] = [];
+// 因此这里用类型断言统一为 string，语义以运行时为准。
+function nativeGlob(pattern: string, cwd: string): string[] {
+  // 剪枝 node_modules/.git（等价 fast-glob 的 ignore: ['node_modules/**', '.git/**']）
+  const exclude = (rel: string): boolean => {
+    const base = rel.split(/[\\/]/).pop() || '';
+    if (base !== 'node_modules' && base !== '.git') return false;
+    try {return statSync(join(cwd, rel)).isDirectory();} catch {return false;}
+  };
 
-    if (data.answer) {
-      lines.push(`## AI 摘要\n${data.answer}\n`);
-    }
+  const matched = (globSync as unknown as (
+    p: string,
+    o: {cwd: string; dot?: boolean; exclude?: (rel: string) => boolean},
+  ) => string[])(pattern, {cwd, dot: false, exclude});
 
-    for (const r of data.results || []) {
-      lines.push(`### ${r.title}`);
-      lines.push(r.url);
-      lines.push(r.content || r.snippet || '');
-      lines.push('');
-    }
-
-    return lines.join('\n') || '没有找到相关结果';
-  },
-};
-
-// ── Serper（手动挡）──────────────────────────────
-
-export const serperSearchTool: ToolDefinition = {
-  name: 'web_search',
-  description: '搜索互联网获取最新信息。返回 Google 搜索结果的标题、链接和摘要',
-  parameters: {
-    type: 'object',
-    properties: {
-      query: {type: 'string', description: '搜索关键词'},
-      max_results: {type: 'number', description: '返回结果数量，默认 5'},
-    },
-    required: [ 'query' ],
-  },
-  isConcurrencySafe: true,
-  isReadOnly: true,
-  maxResultChars: 3000,
-  execute: async ({query, max_results = 5}: {query: string; max_results?: number}) => {
-    const apiKey = process.env.SERPER_API_KEY;
-    if (!apiKey) return '[web_search] 未配置 SERPER_API_KEY，请在 .env 中设置';
-
-    const res = await fetch('https://google.serper.dev/search', {
-      method: 'POST',
-      headers: {
-        'X-API-KEY': apiKey,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({q: query, num: max_results}),
-    });
-
-    if (!res.ok) return `[web_search] 请求失败: HTTP ${res.status}`;
-
-    const data = await res.json() as any;
-    const lines: string[] = [];
-
-    if (data.knowledgeGraph) {
-      const kg = data.knowledgeGraph;
-      lines.push(`## ${kg.title}`);
-      if (kg.description) lines.push(kg.description);
-      lines.push('');
-    }
-
-    for (const r of (data.organic || []).slice(0, max_results)) {
-      lines.push(`### ${r.title}`);
-      lines.push(r.link);
-      lines.push(r.snippet || '');
-      lines.push('');
-    }
-
-    return lines.join('\n') || '没有找到相关结果';
-  },
-};
-
-// fetch_url 粗暴地把 HTML 标签全删了返回纯文本，web_fetch 通过 Turndown 保留了 Markdown 结构——标题层级、链接、代码块、列表都在，LLM 读起来信息密度更高。
-export const webFetchTool: ToolDefinition = {
-  name: 'web_fetch',
-  description: '抓取指定 URL 的网页内容，转换为 Markdown 格式。搭配 web_search 使用——先搜索拿到链接，再用这个工具读取详细内容',
-  parameters: {
-    type: 'object',
-    properties: {
-      url: {type: 'string', description: '完整 URL'},
-    },
-    required: [ 'url' ],
-  },
-  isConcurrencySafe: true,
-  isReadOnly: true,
-  maxResultChars: 3000,
-  execute: async ({url}: {url: string}) => {
-    try {
-      const res = await fetch(url, {
-        headers: {'User-Agent': 'Mozilla/5.0 (compatible; SuperAgent/1.0)'},
-        signal: AbortSignal.timeout(15000),
-      });
-      if (!res.ok) return `抓取失败: HTTP ${res.status}`;
-      const html = await res.text();
-      return htmlToMarkdown(html);
-    } catch (err: any) {
-      return `抓取失败: ${err.message}`;
-    }
-  },
-};
-
-const turndown = new TurndownService({
-  headingStyle: 'atx',
-  codeBlockStyle: 'fenced',
-});
-turndown.remove([ 'script', 'style', 'nav', 'footer', 'header', 'iframe' ]);
-
-function htmlToMarkdown(html: string): string {
-  return turndown.turndown(html);
+  // 只保留文件（等价 fast-glob 的 onlyFiles: true）
+  return matched
+    .filter(p => {try {return statSync(join(cwd, p)).isFile();} catch {return false;} })
+    .sort();
 }
 
-export function pickSearchTool(): ToolDefinition {
-  // if (process.env.TAVILY_API_KEY) return tavilySearchTool;
-  if (process.env.SERPER_API_KEY) return serperSearchTool;
-  return tavilySearchTool;  // 默认（会提示配 Key）
-}
+export const globTool: ToolDefinition = {
+  name: 'glob',
+  description: '按模式搜索文件。支持 * 和 ** 通配符，如 "src/**/*.ts" 匹配 src 下所有 TypeScript 文件',
+  parameters: {
+    type: 'object',
+    properties: {
+      pattern: {type: 'string', description: '搜索模式，如 "**/*.ts"、"src/*.json"'},
+      path: {type: 'string', description: '搜索起始目录，默认当前目录'},
+    },
+    required: [ 'pattern' ],
+    additionalProperties: false,
+  },
+  isConcurrencySafe: true,
+  isReadOnly: true,
+  execute: async ({pattern, path = '.'}: {pattern: string; path?: string}) => {
+  // fast-glob 版本的 glob 工具，已被 nativeGlob 替代
+  // const results = await fg(pattern, {
+  //     cwd: resolve(path),
+  //     ignore: ['node_modules/**', '.git/**'],
+  //     dot: false,
+  //     onlyFiles: true,
+  //     followSymbolicLinks: false,
+  //   });
+
+    const results = nativeGlob(pattern, resolve(path));
+    if (results.length === 0) return `没有找到匹配 "${pattern}" 的文件`;
+    return results.join('\n');
+  },
+};
+
+export const grepTool: ToolDefinition = {
+  name: 'grep',
+  description: '在文件中搜索匹配指定模式的内容。返回匹配的行号和内容',
+  parameters: {
+    type: 'object',
+    properties: {
+      pattern: {type: 'string', description: '搜索模式（正则表达式）'},
+      path: {type: 'string', description: '搜索路径（文件或目录），默认当前目录'},
+    },
+    required: [ 'pattern' ],
+    additionalProperties: false,
+  },
+  isConcurrencySafe: true,
+  isReadOnly: true,
+  maxResultChars: 3000,
+  execute: async ({pattern, path = '.'}: {pattern: string; path?: string}) => {
+    const baseDir = resolve(path);
+    const regex = new RegExp(pattern, 'i');
+    const matches: string[] = [];
+    const SKIP = new Set([ 'node_modules', '.git', 'dist' ]);
+    const BIN_EXT = new Set([ '.png', '.jpg', '.gif', '.woff', '.woff2', '.ico', '.lock' ]);
+
+    function searchFile(filePath: string) {
+      if (matches.length >= 50) return;
+      const ext = filePath.slice(filePath.lastIndexOf('.'));
+      if (BIN_EXT.has(ext)) return;
+
+      let content: string;
+      try {content = readFileSync(filePath, 'utf-8');} catch {return;}
+
+      const lines = content.split('\n');
+      const rel = relative(baseDir, filePath);
+      for (let i = 0; i < lines.length; i++) {
+        if (regex.test(lines[ i ])) {
+          matches.push(`${rel}:${i + 1}: ${lines[ i ].trimEnd()}`);
+          if (matches.length >= 50) return;
+        }
+      }
+    }
+
+    function walk(dir: string) {
+      if (matches.length >= 50) return;
+      let entries: string[];
+      try {entries = readdirSync(dir);} catch {return;}
+
+      for (const name of entries) {
+        if (SKIP.has(name)) continue;
+        const full = join(dir, name);
+        try {
+          const stat = statSync(full);
+          if (stat.isDirectory()) walk(full);
+          else searchFile(full);
+        } catch { /* skip */}
+      }
+    }
+
+    const stat = statSync(baseDir);
+    if (stat.isFile()) {
+      searchFile(baseDir);
+    } else {
+      walk(baseDir);
+    }
+
+    if (matches.length === 0) return `没有找到匹配 "${pattern}" 的内容`;
+    const suffix = matches.length >= 50 ? '\n... (结果已截断，共 50+ 条匹配)' : '';
+    return matches.join('\n') + suffix;
+  },
+};

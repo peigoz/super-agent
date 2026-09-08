@@ -3,7 +3,7 @@ import {generateText, stepCountIs, streamText, type LanguageModel, type ModelMes
 import {createOpenAI} from '@ai-sdk/openai';
 import {createMockModel} from './mock-model';
 import {createInterface} from 'node:readline';
-import {ToolRegistry, type ToolDefinition} from './tools/tool-registry';
+import {ToolRegistry, toolsRepoter, type ToolDefinition} from './tools/tool-registry';
 import {agentLoop, type BudgetState} from './agent/loop';
 import {allTools} from './tools/index';
 import {MCPClient, MockMCPClient} from './tools/mcp-client';
@@ -90,7 +90,7 @@ async function connectMCP() {
 async function main() {
   await connectMCP()
 
-  toolsRepoter();
+  toolsRepoter(registry);
 
   // Session 持久化
   const isContinue = process.argv.includes('--continue');
@@ -116,8 +116,6 @@ async function main() {
   const defense = applyDefense(messages, timestamps);
   messages = defense.messages;
   console.log(`[防线后] ${messages.length} 条消息, ~${defense.tokenEstimate} tokens (节省 ${beforeTokens - defense.tokenEstimate})`);
-  // 更新 token 预算
-  // tracker.replaceMessages(messages, defense.messages);
   console.log(`====================\n`);
 
   // Prompt Pipe 组装 system prompt
@@ -214,6 +212,7 @@ async function compresssor(model: any, messages: ModelMessage[], summary: string
   const currentTokens = estimateTokens(messages);
   if (currentTokens > 4000) {
     if (isContinue) console.log(`\n  ==== [历史对话启动压缩检查] ====`);
+
     console.log(`\n  [压缩检查] ~${currentTokens} tokens, 触发压缩...`);
     const mc2 = microcompact(messages);
     messages = mc2.messages;
@@ -249,23 +248,4 @@ function handleCommandTrigger(cmd: string, {system, messages}: {system: string, 
   }
 
   return false;
-}
-
-function toolsRepoter() {
-  console.log(`已注册 ${registry.getAll().length} 个工具：`);
-  for (const tool of registry.getAll()) {
-    const flags = [
-      tool.isConcurrencySafe ? '可并发' : '串行',
-      tool.isReadOnly ? '只读' : '读写',
-    ].join(', ');
-    console.log(`  - ${tool.name}（${flags}）`);
-  }
-  const allCount = registry.getAll().length;
-  const activeTools = registry.getActiveTools();
-  const estimate = registry.countTokenEstimate();
-  console.log(`\n=== 工具统计 ===`);
-  console.log(`  全部工具: ${allCount} 个`);
-  console.log(`  活跃工具: ${activeTools.length} 个`);
-  console.log(`  延迟工具: ${allCount - activeTools.length} 个`);
-  console.log(`  Token 估算: ~${estimate.active} (活跃) + ~${estimate.deferred} (延迟，不占 prompt)`);
 }

@@ -247,3 +247,22 @@ export function truncateResult(text: string, maxChars: number = DEFAULT_MAX_RESU
   // 很多时候文件尾部的信息比中间更有价值，所以保留头部和尾部，中间省略
   return `${head}\n\n... [省略 ${dropped} 字符] ...\n\n${tail}`;
 }
+
+export function toolsRepoter(registry: ToolRegistry) {
+  console.log(`已注册 ${registry.getAll().length} 个工具：`);
+  for (const tool of registry.getAll()) {
+    const flags = [
+      tool.isConcurrencySafe ? '可并发' : '串行',
+      tool.isReadOnly ? '只读' : '读写',
+    ].join(', ');
+    console.log(`  - ${tool.name}（${flags}）`);
+  }
+  const allCount = registry.getAll().length;
+  const activeTools = registry.getActiveTools();
+  const estimate = registry.countTokenEstimate();
+  console.log(`\n=== 工具统计 ===`);
+  console.log(`  全部工具: ${allCount} 个`);
+  console.log(`  活跃工具: ${activeTools.length} 个`);
+  console.log(`  延迟工具: ${allCount - activeTools.length} 个`);
+  console.log(`  Token 估算: ~${estimate.active} (活跃) + ~${estimate.deferred} (延迟，不占 prompt)`);
+}
