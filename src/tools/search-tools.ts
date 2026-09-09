@@ -2,7 +2,7 @@
 
 import {statSync, globSync, readFileSync, readdirSync} from "fs";
 import {join, relative, resolve} from "path";
-import type {ToolDefinition} from "./tool-registry";
+import type {ToolDefinition} from "./registry";
 
 // Node 24 原生 glob 封装（替代 fast-glob）
 // 注意：@types/node 里 fs.globSync 的 exclude 回调类型标注为 Dirent，但 Node 24 运行时实际传入的是相对路径字符串，

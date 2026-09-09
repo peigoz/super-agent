@@ -3,7 +3,7 @@ import {weatherTool, calculatorTool} from './utility-tools.js';
 import {readFileTool, writeFileTool, editFileTool, listDirectoryTool} from './file-tools.js';
 import {globTool, grepTool} from './search-tools.js';
 import {bashTool} from './bash-tools.js';
-import type {ToolDefinition} from './tool-registry.js';
+import type {ToolDefinition} from './registry.js';
 
 
 // 工具的 description 和 inputSchema 里的属性 description，本质上就是在写 prompt。 

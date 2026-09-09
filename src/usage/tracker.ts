@@ -148,8 +148,7 @@ export function normalizeUsage(usage: LanguageModelUsage): StepUsage {
   //   ?? usage.providerMetadata?.anthropic?.cacheCreationInputTokens // AI SDK 走 provider 元数据
   //   ?? 0;
   const cacheWrite = usage.inputTokenDetails.cacheWriteTokens ?? 0
-
-  console.log('usage raw', usage.raw)
+  // console.log('usage raw', usage.raw)
 
   // OpenAI 把 cached tokens 含在 inputTokens 总数里 → 减出来；Anthropic 单列 → 不用减
   let inputTokens = usage.inputTokens ?? 0;

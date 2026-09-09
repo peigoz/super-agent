@@ -1,7 +1,7 @@
 import {type ModelMessage, streamText} from "ai";
 import {detect, recordCall, recordResult, resetHistory} from '../agent/loop-detection';
 import {isRetryable, calculateDelay, sleep} from './retry';
-import type {ToolRegistry} from "../tools/tool-registry";
+import type {ToolRegistry} from "../tools/registry";
 import {type UsageTracker, normalizeUsage} from '../usage/tracker.js';
 
 

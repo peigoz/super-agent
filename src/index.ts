@@ -3,7 +3,7 @@ import {generateText, stepCountIs, streamText, type LanguageModel, type ModelMes
 import {createOpenAI} from '@ai-sdk/openai';
 import {createMockModel} from './mock-model';
 import {createInterface} from 'node:readline';
-import {ToolRegistry, toolsRepoter, type ToolDefinition} from './tools/tool-registry';
+import {ToolRegistry, toolsRepoter, type ToolDefinition} from './tools/registry';
 import {agentLoop, type BudgetState} from './agent/loop';
 import {allTools} from './tools/index';
 import {MCPClient, MockMCPClient} from './tools/mcp-client';
@@ -13,6 +13,10 @@ import {estimateTokens, microcompact, summarize} from './context/compressor';
 import {applyDefense, estimateMessageTokens, TokenTracker, truncateToolResults, ttlPrune} from './context/defense';
 import {UsageTracker} from './usage/tracker.js';
 import {buildContextSnapshot, renderContextView} from './context/view';
+import {createToolSearchTool} from './tools/tool-search';
+import {dispatch, type CommandContext} from './commands';
+import {MemoryStore} from './memory/store';
+import {createMemoryTool} from './tools/memory-tools';
 
 const qwen = createOpenAI({
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
@@ -23,35 +27,19 @@ const model = process.env.DASHSCOPE_API_KEY
   ? qwen.chat('qwen-plus-latest')
   : createMockModel();
 
+/** Start ----Registry---- Start */
 const registry = new ToolRegistry();
 registry.register(...allTools);
+registry.register(createToolSearchTool(registry));
+/** End ----Registry---- End */
 
-const toolSearchTool: ToolDefinition = {
-  name: 'tool_search',
-  description: '获取延迟工具的完整定义。传入工具名（从系统提示的延迟工具列表中选取），返回该工具的完整参数 Schema',
-  parameters: {
-    type: 'object',
-    properties: {
-      query: {type: 'string', description: '工具名，如 "mcp__github__list_issues"。支持逗号分隔多个工具名'},
-    },
-    required: [ 'query' ],
-    additionalProperties: false,
-  },
-  isConcurrencySafe: true,
-  isReadOnly: true,
-  execute: async ({query}: {query: string}) => {
-    const results = registry.searchTools(query);
-    if (results.length === 0) return `没有找到匹配 "${query}" 的工具`;
-    return results.map(t => ({
-      name: t.name,
-      description: t.description,
-      parameters: t.parameters,
-    }));
-  },
-};
-registry.register(toolSearchTool);
+/** Start ----Memory---- Start */
+const memoryStore = new MemoryStore('.');
+memoryStore.init();
+registry.register(createMemoryTool(memoryStore));
+/** End ----Memory---- End */
 
-async function connectMCP() {
+async function connectGithubMCP() {
   const githubToken = process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
 
   let canSpawn = true;
@@ -88,13 +76,12 @@ async function connectMCP() {
 }
 
 async function main() {
-  await connectMCP()
+  await connectGithubMCP()
 
   toolsRepoter(registry);
 
   // Session 持久化
   const isContinue = process.argv.includes('--continue');
-  const sessionId = 'default';
   const store = new SessionStore('default');
 
   let summary = '';
@@ -128,16 +115,19 @@ async function main() {
     .pipe('coreRules', coreRules())
     .pipe('toolGuide', toolGuide())
     .pipe('deferredTools', deferredTools())
+    .pipe('memoryContext', () => memoryStore.buildPromptSection())
     .pipe('sessionContext', sessionContext());
 
-  const promptCtx: PromptContext = {
-    toolCount: registry.getActiveTools().length,
-    deferredToolSummary: registry.getDeferredToolSummary(),
-    sessionMessageCount: messages.length,
-    sessionId,
-  };
-  // const SYSTEM = pickSystem({type: 'web_search', deferredTools: registry.getDeferredToolSummary()});
-  const SYSTEM = builder.build(promptCtx);
+  // 添加长期记忆后，每轮的 system-prompt 可能会变，改为函数实时构建
+  function makePromptCtx(): PromptContext {
+    return {
+      toolCount: registry.getActiveTools().length,
+      deferredToolSummary: registry.getDeferredToolSummary(),
+      sessionMessageCount: messages.length,
+      sessionId: 'default',
+    };
+  }
+  const promptCtx = makePromptCtx()
   // Debug: 显示 Prompt Pipe 各模块状态
   builder.debug(promptCtx);
 
@@ -155,10 +145,14 @@ async function main() {
         return;
       }
 
-      if (handleCommandTrigger(trimmed, {system: SYSTEM, messages})) {
-        ask()
-        return
-      }
+      const ctx: CommandContext = {
+        messages, timestamps, registry, builder, tracker,
+        sessionStore: store, model, makePromptCtx, ask,
+        memoryStore,
+      };
+      const handled = dispatch(trimmed, ctx);
+      if (handled === 'async') return;
+      if (handled) {ask(); return;}
 
       const userMsg: ModelMessage = {role: 'user', content: trimmed};
       messages.push(userMsg);
@@ -169,9 +163,10 @@ async function main() {
       const turnDefense = applyDefense(messages, timestamps);
       messages = turnDefense.messages;
 
+      const currentSystem = builder.build(makePromptCtx());
       const beforeLen = messages.length;
 
-      await agentLoop(model, registry, messages, SYSTEM, tracker);
+      await agentLoop(model, registry, messages, currentSystem, tracker);
 
       // 持久化本轮新增的消息（agent loop 会往 messages 里 push assistant/tool 消息）
       const newMessages = messages.slice(beforeLen);
@@ -199,7 +194,6 @@ async function main() {
   console.log('  4. 帮我查下oxc的最新动态\n');
   console.log('  5. 帮我查下 vercel/ai 仓库的 star 数量\n');
 
-  handleCommandTrigger('context', {system: SYSTEM, messages})
   ask();
 }
 
@@ -228,24 +222,4 @@ async function compresssor(model: any, messages: ModelMessage[], summary: string
     if (isContinue) console.log(`  ==== [历史对话压缩完成] ====`);
   }
   return summary;
-}
-
-function handleCommandTrigger(cmd: string, {system, messages}: {system: string, messages: ModelMessage[]}) {
-  // /context: 终端可视化的 context 占用，参考 Claude Code 的 /context
-  if (cmd === '/context' || cmd === 'context') {
-    const snapshot = buildContextSnapshot({
-      modelName: process.env.DASHSCOPE_API_KEY ? 'Qwen Plus' : 'Mock Model (开发用)',
-      modelId: process.env.DASHSCOPE_API_KEY ? 'qwen3-6-plus' : 'mock-model',
-      windowTokens: 1_000_000,
-      systemPromptChars: system.length,
-      toolDescriptionChars: registry.getActiveTools().reduce((a, t) => a + t.name.length + (t.description?.length || 0) + JSON.stringify(t.parameters || {}).length, 0),
-      memoryChars: 0,
-      skillsChars: 0,
-      messages,
-    });
-    console.log(renderContextView(snapshot));
-    return true;
-  }
-
-  return false;
 }

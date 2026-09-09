@@ -2,7 +2,7 @@
 import {resolve, sep} from 'node:path';
 import {existsSync, readFileSync} from 'node:fs';
 import {type Server, createServer} from 'node:http';
-import type {ToolDefinition} from './tool-registry.js';
+import type {ToolDefinition} from './registry.js';
 import TurndownService from 'turndown';
 import {lookup} from 'mrmime';
 
