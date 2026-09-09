@@ -4,7 +4,9 @@
 // RAM	          会话历史	         关掉就丢
 // 硬盘/SSD        长期记忆(Memory)	  跨会话，需要检索
 
-// 整个记忆系统的存储层。设计思路是 MEMORY.md 索引 + 独立文件：
+// 整个记忆系统的存储层。设计思路是 MEMORY.md 索引 + 独立文件，目前依赖用户主动记录。更好的做法是后台自动提取：用户无感知的记忆写入，具体实践：
+// 每次对话结束后，fork 一个后台 Agent 来提取记忆。这个后台 Agent 有严格的限制：最多 5 轮对话预算、只能读代码和写记忆文件、跟用户手动写入互斥（防止冲突）。它分析刚才的对话内容，提取值得长期保留的信息，存到记忆目录里。
+// 同时，在用户不活跃的时候，使用后台 Agent 整理记忆：合并重复信息、把相对日期转成绝对日期、删除矛盾的旧记忆、清理过时的条目。
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -139,7 +141,9 @@ export class MemoryStore {
     fs.writeFileSync(this.indexPath, lines.join('\n'), 'utf-8');
     return true;
   }
-
+  // 记忆内容过多时，不适合整个索引注入 system prompt。可以用一个轻量模型做异步精选。
+  // 每轮对话开始前，用 Sonnet（比 Opus 便宜且更快）扫描所有记忆文件的 frontmatter，判断哪些跟当前任务相关，最多选 5 个文件，每个不超过 4KB。
+  // 这个选择过程是异步的，不阻塞主流程的响应。
   buildPromptSection(): string {
     this.init();
     const index = this.loadIndex();
@@ -150,7 +154,7 @@ export class MemoryStore {
     }
 
     const lines = [
-      `[记忆系统] 共 ${entries.length} 条记忆`,
+      `[记忆系统] 共 ${entries.length} 条记忆，你可以使用 memory 工具来保存重要信息。`,
       '',
       '记忆索引：',
       index,
