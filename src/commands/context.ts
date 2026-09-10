@@ -1,5 +1,5 @@
-import {buildContextSnapshot, renderContextView, renderUsageView} from '../context/view.js';
-import type {CommandHandler} from './index.js';
+import {buildContextSnapshot, renderContextView, renderUsageView} from '../context/view';
+import type {CommandHandler} from './index';
 
 export const contextCommands: CommandHandler[] = [
   (cmd, ctx) => {

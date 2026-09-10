@@ -8,15 +8,19 @@ import {agentLoop, type BudgetState} from './agent/loop';
 import {allTools} from './tools/index';
 import {MCPClient, MockMCPClient} from './tools/mcp-client';
 import {SessionStore} from './session/store';
-import {coreRules, deferredTools, PromptBuilder, sessionContext, toolGuide, type PromptContext} from './context/prompt-builder';
+import {coreRules, deferredTools, memoryContext, PromptBuilder, ragContext, sessionContext, toolGuide, type PromptContext} from './context/prompt-builder';
 import {estimateTokens, microcompact, summarize} from './context/compressor';
 import {applyDefense, estimateMessageTokens, TokenTracker, truncateToolResults, ttlPrune} from './context/defense';
-import {UsageTracker} from './usage/tracker.js';
-import {buildContextSnapshot, renderContextView} from './context/view';
+import {UsageTracker} from './usage/tracker';
 import {createToolSearchTool} from './tools/tool-search';
 import {dispatch, type CommandContext} from './commands';
 import {MemoryStore} from './memory/store';
 import {createMemoryTool} from './tools/memory-tools';
+import {createDashScopeEmbedder, createMockEmbedder, embed} from './rag/embedder';
+import {VectorStore} from './rag/store';
+import {createRagTools} from './tools/rag-tools';
+import {chunkDocument} from './rag/chunker';
+import fs, {existsSync} from 'node:fs';
 
 const qwen = createOpenAI({
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
@@ -38,6 +42,14 @@ const memoryStore = new MemoryStore('.');
 memoryStore.init();
 registry.register(createMemoryTool(memoryStore));
 /** End ----Memory---- End */
+
+/** Start ----RAG---- Start */
+const vectorStore = new VectorStore();
+const embedFn = process.env.DASHSCOPE_API_KEY
+  ? createDashScopeEmbedder(process.env.DASHSCOPE_API_KEY)
+  : createMockEmbedder();
+registry.register(...createRagTools(vectorStore, embedFn));
+/** End ----RAG---- End */
 
 async function connectGithubMCP() {
   const githubToken = process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
@@ -115,7 +127,8 @@ async function main() {
     .pipe('coreRules', coreRules())
     .pipe('toolGuide', toolGuide())
     .pipe('deferredTools', deferredTools())
-    .pipe('memoryContext', () => memoryStore.buildPromptSection())
+    .pipe('memoryContext', memoryContext(memoryStore))
+    .pipe('ragContext', ragContext(vectorStore))
     .pipe('sessionContext', sessionContext());
 
   // 添加长期记忆后，每轮的 system-prompt 可能会变，改为函数实时构建
@@ -193,6 +206,22 @@ async function main() {
   console.log('  3. 做一个待办清单的网页应用\n');
   console.log('  4. 帮我查下oxc的最新动态\n');
   console.log('  5. 帮我查下 vercel/ai 仓库的 star 数量\n');
+
+  if (fs.existsSync('docs')) {
+    const files = fs.readdirSync('docs').filter(f => f.endsWith('.md'));
+    if (files.length > 0) {
+      console.log(`  发现 ${files.length} 个文档，自动导入知识库...`);
+      for (const f of files) {
+        const path = `docs/${f}`;
+        const text = fs.readFileSync(path, 'utf-8');
+        const chunks = chunkDocument(path, text);
+        const embeddings = await embed(embedFn, chunks.map(c => c.text));
+        vectorStore.addBatch(chunks.map((c, i) => ({chunk: c, embedding: embeddings[ i ]})));
+        console.log(`    ${f} → ${chunks.length} 个片段`);
+      }
+      console.log(`  知识库就绪，共 ${vectorStore.size()} 个片段\n`);
+    }
+  }
 
   ask();
 }

@@ -1,6 +1,6 @@
-import {setCacheEnabled} from '../mock-model.js';
-import {estimateMessageTokens, applyDefense} from '../context/defense.js';
-import type {CommandHandler} from './index.js';
+import {setCacheEnabled} from '../mock-model';
+import {estimateMessageTokens, applyDefense} from '../context/defense';
+import type {CommandHandler} from './index';
 
 export const debugCommands: CommandHandler[] = [
   (cmd, ctx) => {

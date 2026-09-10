@@ -1,5 +1,5 @@
-import type {MemoryStore} from '../memory/store.js';
-import type {ToolDefinition} from './registry.js';
+import type {MemoryStore} from '../memory/store';
+import type {ToolDefinition} from './registry';
 
 // 存储原则：
 // 1. 能从代码推导的不存。项目用什么技术栈、目录结构长什么样、某个函数在哪个文件——grep 一下就知道了，存到记忆里反而会过期。

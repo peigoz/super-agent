@@ -1,9 +1,9 @@
-import {fetchUrlTool, pickSearchTool, startPreviewTool, webFetchTool} from './web-tools.js';
-import {weatherTool, calculatorTool} from './utility-tools.js';
-import {readFileTool, writeFileTool, editFileTool, listDirectoryTool} from './file-tools.js';
-import {globTool, grepTool} from './search-tools.js';
-import {bashTool} from './bash-tools.js';
-import type {ToolDefinition} from './registry.js';
+import {fetchUrlTool, pickSearchTool, startPreviewTool, webFetchTool} from './web-tools';
+import {weatherTool, calculatorTool} from './utility-tools';
+import {readFileTool, writeFileTool, editFileTool, listDirectoryTool} from './file-tools';
+import {globTool, grepTool} from './search-tools';
+import {bashTool} from './bash-tools';
+import type {ToolDefinition} from './registry';
 
 
 // 工具的 description 和 inputSchema 里的属性 description，本质上就是在写 prompt。 

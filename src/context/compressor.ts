@@ -1,5 +1,5 @@
 import {generateText, type ModelMessage} from 'ai';
-import {textToolResultOutput, toolResultOutputToText} from './tool-result-output.js';
+import {textToolResultOutput, toolResultOutputToText} from './tool-result-output';
 
 
 /** Estimate token count: ~4 chars per token for mixed Chinese/English. */

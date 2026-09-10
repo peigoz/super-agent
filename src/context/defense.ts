@@ -1,5 +1,5 @@
 import type {ModelMessage} from 'ai';
-import {textToolResultOutput, toolResultOutputToText} from './tool-result-output.js';
+import {textToolResultOutput, toolResultOutputToText} from './tool-result-output';
 
 
 // 采用入口管理压缩策略，在工具输出时就开始管制

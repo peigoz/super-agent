@@ -199,8 +199,8 @@ export class MockMCPClient {
 }
 
 /* 生产环境官方SDK示例
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio';
 
 const transport = new StdioClientTransport({
   command: 'npx',

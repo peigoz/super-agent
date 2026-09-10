@@ -51,7 +51,7 @@ export class MemoryStore {
     this.init();
     const slug = entry.name
       .toLowerCase()
-      .replace(/[^a-z0-9一-]+/g, '-')
+      .replace(/[^a-z0-9一-鿿]+/g, '-') // [一-鿿] 实际等价于 [\u4e00-\u9fff]，正好覆盖整个汉字主区。
       .replace(/^-|-$/g, '');
     const filename = `${entry.type}_${slug}.md`;
     const filePath = path.join(this.memoryDir, filename);
