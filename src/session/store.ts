@@ -1,4 +1,4 @@
-import {existsSync, mkdirSync, readFileSync, appendFileSync} from 'node:fs';
+import {existsSync, mkdirSync, readFileSync, appendFileSync, rmSync} from 'node:fs';
 import {join} from 'node:path';
 import type {ModelMessage} from 'ai';
 
@@ -6,7 +6,7 @@ const SESSION_DIR = '.sessions';
 
 export interface SessionEntry {
   type: 'message';
-  timestamp: string;
+  timestamp: number;
   message: ModelMessage;
 }
 
@@ -29,7 +29,7 @@ export class SessionStore {
   append(message: ModelMessage): void {
     const entry: SessionEntry = {
       type: 'message',
-      timestamp: new Date().toISOString(),
+      timestamp: Date.now(),
       message,
     };
     appendFileSync(this.filePath, JSON.stringify(entry) + '\n', 'utf-8');
@@ -41,18 +41,18 @@ export class SessionStore {
     }
   }
 
-  load(): ModelMessage[] {
+  load(): SessionEntry[] {
     if (!existsSync(this.filePath)) return [];
     const content = readFileSync(this.filePath, 'utf-8').trim();
     if (!content) return [];
 
-    const messages: ModelMessage[] = [];
+    const messages: SessionEntry[] = [];
     for (const line of content.split('\n')) {
       if (!line.trim()) continue;
       try {
         const entry: SessionEntry = JSON.parse(line);
         if (entry.type === 'message') {
-          messages.push(entry.message);
+          messages.push(entry);
         }
       } catch { /* skip malformed lines */}
     }

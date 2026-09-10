@@ -9,6 +9,8 @@
 // 同时，在用户不活跃的时候，使用后台 Agent 整理记忆：合并重复信息、把相对日期转成绝对日期、删除矛盾的旧记忆、清理过时的条目。
 import fs from 'node:fs';
 import path from 'node:path';
+import {bm25Search, type SearchHit} from './search';
+import {type ValidationReport, lintAll} from './validator';
 
 export interface MemoryEntry {
   name: string;
@@ -16,6 +18,8 @@ export interface MemoryEntry {
   type: 'user' | 'feedback' | 'project' | 'reference';
   content: string;
   filePath: string;
+  lastWriteAt?: number;
+  lastReadAt?: number;
 }
 
 const MEMORY_DIR = '.memory';
@@ -55,12 +59,15 @@ export class MemoryStore {
       .replace(/^-|-$/g, '');
     const filename = `${entry.type}_${slug}.md`;
     const filePath = path.join(this.memoryDir, filename);
+    const now = Date.now();
 
     const fileContent = [
       '---',
       `name: ${entry.name}`,
       `description: ${entry.description}`,
       `type: ${entry.type}`,
+      `lastWriteAt: ${now}`,
+      `lastReadAt: ${now}`,
       '---',
       '',
       entry.content,
@@ -109,13 +116,8 @@ export class MemoryStore {
     return entries;
   }
 
-  search(query: string): MemoryEntry[] {
-    const all = this.list();
-    const keywords = query.toLowerCase().split(/\s+/);
-    return all.filter(entry => {
-      const text = `${entry.name} ${entry.description} ${entry.content}`.toLowerCase();
-      return keywords.some(kw => text.includes(kw));
-    });
+  search(query: string, topK = 5): SearchHit[] {
+    return bm25Search(this.list(), query, topK);
   }
 
   loadIndex(): string {
@@ -127,8 +129,22 @@ export class MemoryStore {
   loadFile(filename: string): string | null {
     const filePath = path.join(this.memoryDir, filename);
     if (!fs.existsSync(filePath)) return null;
+    this.touchReadAt(filename);
     const raw = fs.readFileSync(filePath, 'utf-8');
     return raw.length > MAX_FILE_CHARS ? raw.slice(0, MAX_FILE_CHARS) + '\n...(已截断)' : raw;
+  }
+
+  private touchReadAt(filename: string): void {
+    const filePath = path.join(this.memoryDir, filename);
+    const raw = fs.readFileSync(filePath, 'utf-8');
+    const now = Date.now();
+    let updated: string;
+    if (/^lastReadAt:.*$/m.test(raw)) {
+      updated = raw.replace(/^lastReadAt:.*$/m, `lastReadAt: ${now}`);
+    } else {
+      updated = raw.replace(/^---\n/, `---\nlastReadAt: ${now}\n`);
+    }
+    fs.writeFileSync(filePath, updated, 'utf-8');
   }
 
   delete(filename: string): boolean {
@@ -141,6 +157,11 @@ export class MemoryStore {
     fs.writeFileSync(this.indexPath, lines.join('\n'), 'utf-8');
     return true;
   }
+
+  lint(): ValidationReport[] {
+    return lintAll(this.list(), this.baseDir);
+  }
+
   // 记忆内容过多时，不适合整个索引注入 system prompt。可以用一个轻量模型做异步精选。
   // 每轮对话开始前，用 Sonnet（比 Opus 便宜且更快）扫描所有记忆文件的 frontmatter，判断哪些跟当前任务相关，最多选 5 个文件，每个不超过 4KB。
   // 这个选择过程是异步的，不阻塞主流程的响应。
@@ -154,13 +175,15 @@ export class MemoryStore {
     }
 
     const lines = [
-      `[记忆系统] 共 ${entries.length} 条记忆，你可以使用 memory 工具来保存重要信息。`,
+      `[记忆系统] 共 ${entries.length} 条记忆，你可以使用 memory 工具来保存重要信息和来读取具体记忆内容。`,
       '',
       '记忆索引：',
       index,
       '',
-      '使用 memory 工具的 read 操作来读取具体记忆内容。',
-      '记忆是线索，不是事实——使用前先验证其准确性。',
+      '记忆使用原则：',
+      '- 记忆是线索，不是事实——使用前先用工具验证（read_file、grep 确认）',
+      '- 不存代码能推导的、git 能查的、文档已经写了的',
+      '- 只存对话中出现的、其他地方推导不出来的信息',
     ];
     return lines.join('\n');
   }

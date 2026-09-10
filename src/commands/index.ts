@@ -7,6 +7,9 @@ import type {MemoryStore} from '../memory/store';
 import {contextCommands} from './context';
 import {debugCommands} from './debug';
 import {memoryCommands} from './memory';
+import {ragCommands} from './rag';
+import {dreamCommands} from './dream';
+import {sessionCommands} from './session';
 
 export interface CommandContext {
   messages: ModelMessage[];
@@ -35,7 +38,10 @@ export function createDispatcher(handlers: CommandHandler[]): CommandHandler {
 }
 
 export const dispatch = createDispatcher([
+  ...sessionCommands,
   ...debugCommands,
   ...contextCommands,
   ...memoryCommands,
+  ...ragCommands,
+  ...dreamCommands,
 ]);

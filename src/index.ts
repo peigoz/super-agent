@@ -94,29 +94,13 @@ async function main() {
   toolsRepoter(registry);
 
   // Session 持久化
-  const isContinue = process.argv.includes('--continue');
-  const store = new SessionStore('default');
+  const sessionStore = new SessionStore('default');
 
   let summary = '';
   let messages: ModelMessage[] = [];
-  if (isContinue && store.exists()) {
-    messages = store.load();
-    console.log(`\n[Session] 恢复会话，${messages.length} 条历史消息`);
-  } else {
-    console.log(`\n[Session] 新会话`);
-  }
 
   const tracker = new UsageTracker('.usage/today.jsonl');
   const timestamps = new Map<number, number>();
-
-  // 启动时压缩检查，替换为 tools 三层即时防线压缩。目的降低 LLM 压缩频率，节省费用和时间
-  // summary = await compresssor(model, messages, summary, isContinue);
-  console.log(`\n=== 三层即时防线 ===`);
-  const beforeTokens = estimateMessageTokens(messages);
-  const defense = applyDefense(messages, timestamps);
-  messages = defense.messages;
-  console.log(`[防线后] ${messages.length} 条消息, ~${defense.tokenEstimate} tokens (节省 ${beforeTokens - defense.tokenEstimate})`);
-  console.log(`====================\n`);
 
   // Prompt Pipe 组装 system prompt
   // 保持 prompt 前缀不变，计算结果就能复用。不变的 section 放前面，变的放后面：
@@ -160,9 +144,9 @@ async function main() {
       }
 
       const ctx: CommandContext = {
-        messages, timestamps, registry, builder, tracker,
-        sessionStore: store, model, makePromptCtx, ask,
-        memoryStore,
+        messages, timestamps, registry, tracker, model,
+        builder, makePromptCtx, ask,
+        sessionStore, memoryStore, vectorStore,
       };
       const handled = dispatch(trimmed, ctx);
       if (handled === 'async') return;
@@ -171,7 +155,7 @@ async function main() {
       const userMsg: ModelMessage = {role: 'user', content: trimmed};
       messages.push(userMsg);
       timestamps.set(messages.length - 1, Date.now());
-      store.append(userMsg);
+      sessionStore.append(userMsg);
 
       // 每次模型执行前都调用 Tools 压缩，降低 LLM 压缩摘要触发频率
       const turnDefense = applyDefense(messages, timestamps);
@@ -188,10 +172,10 @@ async function main() {
       for (let i = beforeLen; i < messages.length; i++) {
         timestamps.set(i, now);
       }
-      store.appendAll(newMessages);
+      sessionStore.appendAll(newMessages);
 
       // 每轮对话后 LLM 压缩检查，作为三层防线的兜底，压缩（user/assistant 消息）
-      summary = await compresssor(model, messages, summary, false);
+      summary = await compresssor(model, messages, summary);
 
       const status = estimateMessageTokens(messages);
       console.log(`  [Token] ~${status} tokens`);
@@ -215,12 +199,11 @@ main().catch(console.error);
 
 // 整个防御体系的执行顺序是：截断（Layer 2）→ TTL 修剪（Layer 3）→ Token 估算（Layer 1，判断是否需要 LLM 压缩）→ 如果需要，触发 Microcompact → 如果还不够，触发 Summarization。
 // 采用软删除 + LLM 压缩历史对话的策略，LLM 压缩只在即时防线不够用的时候才触发：
-async function compresssor(model: any, messages: ModelMessage[], summary: string, isContinue: boolean): Promise<string> {
+async function compresssor(model: any, messages: ModelMessage[], summary: string): Promise<string> {
   // Check if compaction needed after each turn
   const currentTokens = estimateTokens(messages);
-  if (currentTokens > 4000) {
-    if (isContinue) console.log(`\n  ==== [历史对话启动压缩检查] ====`);
 
+  if (currentTokens > 4000) {
     console.log(`\n  [压缩检查] ~${currentTokens} tokens, 触发压缩...`);
     const mc2 = microcompact(messages);
     messages = mc2.messages;
@@ -232,8 +215,6 @@ async function compresssor(model: any, messages: ModelMessage[], summary: string
       summary = comp2.summary;
       console.log(`  [Summarization] 压缩了 ${comp2.compressedCount} 条消息, ~${estimateTokens(messages)} tokens`);
     }
-
-    if (isContinue) console.log(`  ==== [历史对话压缩完成] ====`);
   }
   return summary;
 }
