@@ -1,4 +1,5 @@
 import type {MemoryStore} from "../memory/store";
+import type {SqliteVectorStore} from "../rag/sqlite-store";
 import type {VectorStore} from "../rag/store";
 
 export interface PromptContext {
@@ -78,7 +79,7 @@ export function memoryContext(memoryStore: MemoryStore): (ctx: PromptContext) =>
   return () => memoryStore.buildPromptSection();
 }
 
-export function ragContext(vectorStore: VectorStore): (ctx: PromptContext) => string | null {
+export function ragContext(vectorStore: SqliteVectorStore): (ctx: PromptContext) => string | null {
   return () => {
     const size = vectorStore.size();
     if (size === 0) return null;

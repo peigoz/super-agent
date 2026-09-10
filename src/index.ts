@@ -18,9 +18,10 @@ import {MemoryStore} from './memory/store';
 import {createMemoryTool} from './tools/memory-tools';
 import {createDashScopeEmbedder, createMockEmbedder, embed} from './rag/embedder';
 import {VectorStore} from './rag/store';
+import {SqliteVectorStore} from './rag/sqlite-store';
 import {createRagTools} from './tools/rag-tools';
 import {chunkDocument} from './rag/chunker';
-import fs, {existsSync} from 'node:fs';
+import fs from 'node:fs';
 
 const qwen = createOpenAI({
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
@@ -44,7 +45,7 @@ registry.register(createMemoryTool(memoryStore));
 /** End ----Memory---- End */
 
 /** Start ----RAG---- Start */
-const vectorStore = new VectorStore();
+const vectorStore = new SqliteVectorStore('knowledge.db');
 const embedFn = process.env.DASHSCOPE_API_KEY
   ? createDashScopeEmbedder(process.env.DASHSCOPE_API_KEY)
   : createMockEmbedder();
@@ -206,22 +207,6 @@ async function main() {
   console.log('  3. 做一个待办清单的网页应用\n');
   console.log('  4. 帮我查下oxc的最新动态\n');
   console.log('  5. 帮我查下 vercel/ai 仓库的 star 数量\n');
-
-  if (fs.existsSync('docs')) {
-    const files = fs.readdirSync('docs').filter(f => f.endsWith('.md'));
-    if (files.length > 0) {
-      console.log(`  发现 ${files.length} 个文档，自动导入知识库...`);
-      for (const f of files) {
-        const path = `docs/${f}`;
-        const text = fs.readFileSync(path, 'utf-8');
-        const chunks = chunkDocument(path, text);
-        const embeddings = await embed(embedFn, chunks.map(c => c.text));
-        vectorStore.addBatch(chunks.map((c, i) => ({chunk: c, embedding: embeddings[ i ]})));
-        console.log(`    ${f} → ${chunks.length} 个片段`);
-      }
-      console.log(`  知识库就绪，共 ${vectorStore.size()} 个片段\n`);
-    }
-  }
 
   ask();
 }

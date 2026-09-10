@@ -129,7 +129,7 @@ function normalizeViaSigmoid(scores: number[]): number[] {
 
 // ── MMR deduplication ──────────────────────
 
-function mmrSelect(results: SearchResult[], topK: number): SearchResult[] {
+export function mmrSelect(results: SearchResult[], topK: number): SearchResult[] {
   if (results.length <= topK) return results;
 
   const selected: SearchResult[] = [ results[ 0 ] ];

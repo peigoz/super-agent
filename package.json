@@ -9,12 +9,15 @@
   "dependencies": {
     "@ai-sdk/openai": "^4.0.50",
     "ai": "^7.0.83",
+    "better-sqlite3": "^13.0.3",
     "dotenv": "^17.4.2",
     "mrmime": "^2.0.1",
+    "sqlite-vec": "^0.1.9",
     "turndown": "^7.2.4"
   },
   "devDependencies": {
     "@ai-sdk/provider": "4.0.8",
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^26.4.0",
     "@types/turndown": "^5.0.6",
     "tsx": "^4.23.12",
