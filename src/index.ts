@@ -20,8 +20,7 @@ import {createDashScopeEmbedder, createMockEmbedder, embed} from './rag/embedder
 import {VectorStore} from './rag/store';
 import {SqliteVectorStore} from './rag/sqlite-store';
 import {createRagTools} from './tools/rag-tools';
-import {chunkDocument} from './rag/chunker';
-import fs from 'node:fs';
+import process from 'node:process';
 
 const qwen = createOpenAI({
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
@@ -93,14 +92,22 @@ async function main() {
 
   toolsRepoter(registry);
 
-  // Session 持久化
-  const sessionStore = new SessionStore('default');
-
   let summary = '';
   let messages: ModelMessage[] = [];
 
-  const tracker = new UsageTracker('.usage/today.jsonl');
+  // Session 持久化
   const timestamps = new Map<number, number>();
+  const sessionStore = new SessionStore('default');
+  const isContinue = process.argv.includes('--continue');
+  if (isContinue && sessionStore.exists()) {
+    messages = sessionStore.load().map((entry, idx) => {
+      timestamps.set(idx, entry.timestamp)
+      return entry.message
+    })
+    console.log(`\n[Session] 恢复会话，${messages.length} 条历史消息`);
+  } else {
+    console.log(`\n[Session] 新会话`);
+  }
 
   // Prompt Pipe 组装 system prompt
   // 保持 prompt 前缀不变，计算结果就能复用。不变的 section 放前面，变的放后面：
@@ -129,6 +136,7 @@ async function main() {
   // Debug: 显示 Prompt Pipe 各模块状态
   builder.debug(promptCtx);
 
+  const tracker = new UsageTracker('.usage/today.jsonl');
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
