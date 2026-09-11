@@ -3,7 +3,7 @@ import {generateText, stepCountIs, streamText, type LanguageModel, type ModelMes
 import {createOpenAI} from '@ai-sdk/openai';
 import {createMockModel} from './mock-model';
 import {createInterface} from 'node:readline';
-import {ToolRegistry, toolsRepoter, type ToolDefinition} from './tools/registry';
+import {ToolRegistry, toolsRepoter} from './tools/registry';
 import {agentLoop, type BudgetState} from './agent/loop';
 import {allTools} from './tools/index';
 import {MCPClient, MockMCPClient} from './tools/mcp-client';
@@ -21,6 +21,7 @@ import {VectorStore} from './rag/store';
 import {SqliteVectorStore} from './rag/sqlite-store';
 import {createRagTools} from './tools/rag-tools';
 import process from 'node:process';
+import {SkillLoader, skillRepoter} from './skills/loader';
 
 const qwen = createOpenAI({
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
@@ -50,6 +51,12 @@ const embedFn = process.env.DASHSCOPE_API_KEY
   : createMockEmbedder();
 registry.register(...createRagTools(vectorStore, embedFn));
 /** End ----RAG---- End */
+
+/** Start ----Skills---- Start */
+const skillLoader = new SkillLoader('.');
+skillLoader.load();
+skillRepoter(skillLoader)
+/** End ----Skills---- End */
 
 async function connectGithubMCP() {
   const githubToken = process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
@@ -121,6 +128,7 @@ async function main() {
     .pipe('deferredTools', deferredTools())
     .pipe('memoryContext', memoryContext(memoryStore))
     .pipe('ragContext', ragContext(vectorStore))
+    .pipe('skillContext', () => skillLoader.buildPromptSection())
     .pipe('sessionContext', sessionContext());
 
   // 添加长期记忆后，每轮的 system-prompt 可能会变，改为函数实时构建
@@ -153,7 +161,7 @@ async function main() {
 
       const ctx: CommandContext = {
         messages, timestamps, registry, tracker, model,
-        builder, makePromptCtx, ask,
+        builder, makePromptCtx, ask, skillLoader,
         sessionStore, memoryStore, vectorStore,
       };
       const handled = dispatch(trimmed, ctx);

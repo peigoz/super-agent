@@ -9,6 +9,8 @@ import {debugCommands} from './debug';
 import {memoryCommands} from './memory';
 import {ragCommands} from './rag';
 import {dreamCommands} from './dream';
+import type {SkillLoader} from '../skills/loader';
+import {skillCommands} from './skill';
 
 export interface CommandContext {
   messages: ModelMessage[];
@@ -21,6 +23,7 @@ export interface CommandContext {
   makePromptCtx: () => PromptContext;
   ask: () => void;
   memoryStore?: MemoryStore;
+  skillLoader: SkillLoader
   [ key: string ]: any;
 }
 
@@ -42,4 +45,5 @@ export const dispatch = createDispatcher([
   ...memoryCommands,
   ...ragCommands,
   ...dreamCommands,
+  ...skillCommands,
 ]);
