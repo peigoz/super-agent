@@ -11,6 +11,8 @@ import {ragCommands} from './rag';
 import {dreamCommands} from './dream';
 import type {SkillLoader} from '../skills/loader';
 import {skillCommands} from './skill';
+import {pluginCommands} from './plugin';
+import type {PluginManager} from '../plugins/manager';
 
 export interface CommandContext {
   messages: ModelMessage[];
@@ -24,6 +26,7 @@ export interface CommandContext {
   ask: () => void;
   memoryStore?: MemoryStore;
   skillLoader: SkillLoader
+  pluginManager: PluginManager
   [ key: string ]: any;
 }
 
@@ -46,4 +49,5 @@ export const dispatch = createDispatcher([
   ...ragCommands,
   ...dreamCommands,
   ...skillCommands,
+  ...pluginCommands,
 ]);

@@ -25,7 +25,8 @@ export const skillCommands: CommandHandler[] = [
 
   // /skill load <name>
   (cmd, ctx) => {
-    if (cmd !== '/skill' && cmd !== '/skill load' && cmd !== 'skill load') return false;
+    if (!cmd.startsWith('/skill load') && !cmd.startsWith('skill load')) return false;
+
     const skillLoader = ctx.skillLoader;
     const match = cmd.match(/^\/skill\s+load\s+(\S+)$/);
     if (!match) return false;
@@ -42,7 +43,8 @@ export const skillCommands: CommandHandler[] = [
 
   // /skill unload <name>
   (cmd, ctx) => {
-    if (cmd !== '/skill' && cmd !== '/skill unload' && cmd !== 'skill unload') return false;
+    if (!cmd.startsWith('/skill unload') && !cmd.startsWith('skill unload')) return false;
+
     const skillLoader = ctx.skillLoader;
     const match = cmd.match(/^\/skill\s+unload\s+(\S+)$/);
     if (!match) return false;
@@ -59,6 +61,7 @@ export const skillCommands: CommandHandler[] = [
   // /<skill-name> — 直接用 /code-review 激活并触发
   (cmd, ctx) => {
     if (!cmd.startsWith('/')) return false;
+
     const skillLoader = ctx.skillLoader;
     const parts = cmd.slice(1).split(/\s+/);
     const name = parts[ 0 ];

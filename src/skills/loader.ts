@@ -1,6 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+// 整个 skill 系统最关键的设计——渐进式加载。实现分三层：
+// Level 1 启动时只加载 frontmatter（name + description + when_to_use，每个 skill 大概 100 token）；
+// Level 2 用户激活后才加载完整内容；
+// Level 3 skill 目录下的参考文件按需用 Read 工具读取。
 export interface SkillDefinition {
   name: string;
   description: string;
@@ -117,7 +121,7 @@ export function skillRepoter(skillLoader: SkillLoader) {
   const loadedSkills = skillLoader.list()
 
   if (loadedSkills.length > 0) {
-    console.log(`  发现 ${loadedSkills.length} 个 skill：`);
+    console.log(`发现 ${loadedSkills.length} 个 skill：`);
     for (const s of loadedSkills) console.log(`    /${s.name} — ${s.description}`);
     console.log('');
   }

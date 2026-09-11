@@ -22,6 +22,8 @@ import {SqliteVectorStore} from './rag/sqlite-store';
 import {createRagTools} from './tools/rag-tools';
 import process from 'node:process';
 import {SkillLoader, skillRepoter} from './skills/loader';
+import {PluginManager, pluginRepoter, type PluginDefinition} from './plugins/manager';
+import {supabasePlugin} from './plugins/supabase-plugin';
 
 const qwen = createOpenAI({
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
@@ -58,6 +60,11 @@ skillLoader.load();
 skillRepoter(skillLoader)
 /** End ----Skills---- End */
 
+/** Start ----Plugins---- Start */
+const pluginManager = new PluginManager(registry);
+pluginManager.availablePlugins.set('supabase', supabasePlugin)
+/** End ----Plugins---- End */
+
 async function connectGithubMCP() {
   const githubToken = process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
 
@@ -70,18 +77,18 @@ async function connectGithubMCP() {
   }
 
   if (githubToken && canSpawn) {
-    console.log('\n连接 GitHub MCP Server...');
+    console.log('连接 GitHub MCP Server...');
     try {
       const client = new MCPClient(
         'npx', [ '-y', '@modelcontextprotocol/server-github' ],
         {GITHUB_PERSONAL_ACCESS_TOKEN: githubToken},
       );
       const tools = await registry.registerMCPServer('github', client);
-      console.log(`  已注册 ${tools.length} 个 MCP 工具`);
+      console.log(`  已注册 ${tools.length} 个 MCP 工具\n`);
       return;
     } catch (err) {
       console.log(`  MCP 连接失败: ${err instanceof Error ? err.message : err}`);
-      console.log('  降级为 Mock MCP...');
+      console.log('  降级为 Mock MCP...\n');
     }
   }
 
@@ -96,6 +103,17 @@ async function connectGithubMCP() {
 
 async function main() {
   await connectGithubMCP()
+
+  // 启动时自动加载插件
+  console.log('加载插件...');
+  for (const [ name, def ] of pluginManager.availablePlugins) {
+    try {
+      await pluginManager.load(def);
+      pluginRepoter(pluginManager);
+    } catch {
+      console.log(`  ✗ ${name} — 加载失败`);
+    }
+  }
 
   toolsRepoter(registry);
 
@@ -155,13 +173,15 @@ async function main() {
       const trimmed = input.trim();
       if (!trimmed || trimmed === 'exit') {
         console.log('Bye!');
+        await pluginManager.unloadAll();
         rl.close();
         return;
       }
 
       const ctx: CommandContext = {
         messages, timestamps, registry, tracker, model,
-        builder, makePromptCtx, ask, skillLoader,
+        builder, makePromptCtx, ask,
+        skillLoader, pluginManager,
         sessionStore, memoryStore, vectorStore,
       };
       const handled = dispatch(trimmed, ctx);
