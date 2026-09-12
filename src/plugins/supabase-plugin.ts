@@ -1,4 +1,4 @@
-import type {PluginDefinition, PluginApi} from "./manager";
+import type {PluginDefinition, PluginApi} from "./types";
 
 export const supabasePlugin: PluginDefinition = {
   name: 'supabase',

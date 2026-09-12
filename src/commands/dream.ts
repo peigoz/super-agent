@@ -1,6 +1,6 @@
 import {type ModelMessage} from 'ai';
-import {agentLoop} from '../agent/loop.js';
-import type {CommandHandler} from './index.js';
+import {agentLoop} from '../agent/loop';
+import type {CommandHandler} from './index';
 
 const DREAM_PROMPT = [
   '请对记忆库做一次完整的整理（dream），按以下四个阶段执行：',

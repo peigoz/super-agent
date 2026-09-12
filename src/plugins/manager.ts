@@ -1,4 +1,7 @@
-import type {ToolRegistry, ToolDefinition} from '../tools/registry.js';
+import type {ChannelGateway} from '../channels/gateway';
+import type {ChannelDefinition} from '../channels/types';
+import type {ToolRegistry, ToolDefinition} from '../tools/registry';
+import type {PluginDefinition, PluginConfig, PluginApi} from './types';
 
 // 插件系统五个设计决策:
 // 1. 接口契约（PluginDefinition）——定义清楚"一个插件长什么样"。这是所有插件系统的起点。不管你做的是 Agent、编辑器、还是构建工具，第一步都是定义这个接口。
@@ -6,26 +9,6 @@ import type {ToolRegistry, ToolDefinition} from '../tools/registry.js';
 // 3. 命名空间隔离（pluginName__toolName）——防止不同插件之间的名字冲突。npm 用 scope（@org/pkg），Chrome 扩展用 manifest ID，道理一样。
 // 4. 生命周期管理（activate / destroy）——解决资源泄漏问题。任何需要初始化和清理的资源（连接池、文件句柄、定时器），都必须有显式的生命周期。
 // 5. 错误隔离——一个插件挂了不影响其他插件，保证基本的稳定性。
-
-export interface PluginConfig {
-  [ key: string ]: string | number | boolean;
-}
-
-export interface PluginApi {
-  registerTools(tools: ToolDefinition[]): void;
-  getConfig(): PluginConfig;
-  log(message: string): void;
-}
-
-export interface PluginDefinition {
-  name: string;
-  version: string;
-  description: string;
-  config?: PluginConfig;
-
-  activate(api: PluginApi): Promise<void> | void;
-  destroy?(): Promise<void> | void;
-}
 
 interface LoadedPlugin {
   definition: PluginDefinition;
@@ -35,11 +18,13 @@ interface LoadedPlugin {
 export class PluginManager {
   private plugins = new Map<string, LoadedPlugin>();
   private registry: ToolRegistry;
+  private gateway: ChannelGateway;
 
   public availablePlugins = new Map<string, PluginDefinition>();
 
-  constructor(registry: ToolRegistry) {
+  constructor(registry: ToolRegistry, gateway: ChannelGateway) {
     this.registry = registry;
+    this.gateway = gateway;
   }
 
   async load(definition: PluginDefinition, config?: PluginConfig): Promise<string[]> {
@@ -66,6 +51,9 @@ export class PluginManager {
           this.registry.register(prefixedTool);
           registeredTools.push(prefixedName);
         }
+      },
+      registerChannel: (channel: ChannelDefinition) => {
+        this.gateway.register(channel)
       },
       getConfig: () => resolvedConfig,
       log: (message: string) => {

@@ -1,7 +1,6 @@
 import {type ModelMessage} from 'ai';
-import {agentLoop} from '../agent/loop.js';
-import type {CommandHandler} from './index.js';
-import type {SkillLoader} from '../skills/loader.js';
+import {agentLoop} from '../agent/loop';
+import type {CommandHandler} from './index';
 
 export const skillCommands: CommandHandler[] = [
   // /skill list
@@ -81,7 +80,7 @@ export const skillCommands: CommandHandler[] = [
     ctx.timestamps.set(ctx.messages.length - 1, Date.now());
     ctx.sessionStore.append(userMsg);
 
-    const currentSystem = ctx.builder.build(ctx.makePromptCtx());
+    const currentSystem = ctx.builder.build(ctx.makePromptCtx(ctx.messages));
     const beforeLen = ctx.messages.length;
 
     agentLoop(ctx.model, ctx.registry, ctx.messages, currentSystem, ctx.tracker).then(() => {

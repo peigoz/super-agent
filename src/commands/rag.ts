@@ -1,4 +1,4 @@
-import type {CommandHandler} from './index.js';
+import type {CommandHandler} from './index';
 
 export const ragCommands: CommandHandler[] = [
   (cmd, ctx) => {

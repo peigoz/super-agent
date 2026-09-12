@@ -1,4 +1,4 @@
-import type {CommandHandler} from './index.js';
+import type {CommandHandler} from './index';
 
 export const pluginCommands: CommandHandler[] = [
   // /plugin 或 /plugin list

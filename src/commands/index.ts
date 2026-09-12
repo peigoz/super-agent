@@ -13,6 +13,8 @@ import type {SkillLoader} from '../skills/loader';
 import {skillCommands} from './skill';
 import {pluginCommands} from './plugin';
 import type {PluginManager} from '../plugins/manager';
+import type {ChannelGateway} from '../channels/gateway';
+import {channelCommands} from './channel';
 
 export interface CommandContext {
   messages: ModelMessage[];
@@ -22,11 +24,12 @@ export interface CommandContext {
   tracker: UsageTracker;
   sessionStore: SessionStore;
   model: any;
-  makePromptCtx: () => PromptContext;
+  makePromptCtx: (messages: ModelMessage[]) => PromptContext;
   ask: () => void;
   memoryStore?: MemoryStore;
   skillLoader: SkillLoader
   pluginManager: PluginManager
+  gateway: ChannelGateway
   [ key: string ]: any;
 }
 
@@ -50,4 +53,5 @@ export const dispatch = createDispatcher([
   ...dreamCommands,
   ...skillCommands,
   ...pluginCommands,
+  ...channelCommands,
 ]);

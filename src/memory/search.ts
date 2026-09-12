@@ -1,4 +1,4 @@
-import type {MemoryEntry} from './store.js';
+import type {MemoryEntry} from './store';
 
 export interface SearchHit {
   entry: MemoryEntry;

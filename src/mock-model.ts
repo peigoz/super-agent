@@ -1,3 +1,15 @@
+/**
+ * Mock Model v0.16 — Channel
+ *
+ * 在 v0.12 RAG 的基础上，新增对记忆维护场景的意图识别：
+ * - "lint 记忆 / 检查记忆"     → memory action=lint
+ * - "搜记忆 xxx / 找记忆 xxx" → memory action=search（结果走 BM25）
+ *
+ * 拿 system + tools 的指纹做"前缀稳定性"判断：
+ * - 第一次见的 prefix → 全部记 cacheWrite
+ * - 跟上一次一模一样 → 全部记 cacheRead
+ * - prefix 变了（system 改了、工具增减、注入了时间戳）→ 又一次 cacheWrite
+ */
 
 let retryTestCount = 0;
 let lastPrefixHash: string | null = null;
@@ -93,13 +105,17 @@ function makeUsage(prompt: any[], outputChars = 80) {
 
 const TEXT_RESPONSES: Record<string, string> = {
   default:
-    '你好！我是 Super Agent v0.11。我现在有记忆系统了——试试输入 "记住我喜欢用 TypeScript" 或 "我的记忆" 看看效果。',
+    '你好！我是 Super Agent v0.16——现在支持 Plugin 动态加载了。试试 /plugin 看看已加载的插件，或者让我帮你查数据库。',
   greeting:
-    '你好！我是 Super Agent v0.11，现在支持跨会话记忆了 :) 输入 memory 可以查看记忆相关的命令。',
+    '你好！我是 Super Agent v0.16，支持 Plugin 扩展。试试让我查数据库或者 /plugin 管理插件 :)',
   memorySaved:
     '好的，我已经把这条信息存到记忆里了。下次你重新打开对话，我还会记得这件事。',
   memoryRecalled:
     '让我查一下记忆...',
+  lintFinished:
+    '记忆库 lint 跑完了，详细情况看上面的报告。建议清理掉那些路径已经不存在的条目，或者把同名的合并一下。',
+  dreamFinished:
+    '记忆整理完成！这次做了以下操作：\n\n- 删除了 old-build-config（webpack.config.js 已不存在，854 天没读过）\n- 删除了 deploy-process-2（与 deploy-process 重名的早期版本）\n- 保留了 legacy-auth-module（路径过期但内容可能还有参考价值，建议手动更新）\n- 保留了 deploy-process（路径需要更新但部署流程本身还有用）\n- typescript-preference 健康，无需处理\n\n记忆库从 5 条精简到 3 条。',
 };
 
 interface ToolCallIntent {
@@ -175,6 +191,36 @@ function detectToolIntent(prompt: any[]): ToolCallIntent | null {
     return {toolName: 'get_weather', args: {city: '北京'}};
   }
 
+  // Dream flow — 多步记忆整理
+  if (text.includes('阶段 1') && text.includes('阶段 2') && text.includes('记忆整理') || text.includes('dream')) {
+    if (!hasToolResults(prompt)) {
+      // Step 1: 先 list
+      return {toolName: 'memory', args: {action: 'list'}};
+    }
+    const combined = getToolResultContent(prompt);
+    if (combined.includes('记忆列表') && !combined.includes('lint 报告')) {
+      // Step 2: list 完了，跑 lint
+      return {toolName: 'memory', args: {action: 'lint'}};
+    }
+    const deletedOld = combined.includes('已删除: project_old-build-config') || combined.includes('文件不存在: project_old-build-config');
+    const deletedDup = combined.includes('已删除: project_deploy-process-2') || combined.includes('文件不存在: project_deploy-process-2');
+    if (combined.includes('lint 报告') && !deletedOld) {
+      // Step 3: lint 完了，删掉 old-build-config
+      return {toolName: 'memory', args: {action: 'delete', filename: 'project_old-build-config.md'}};
+    }
+    if (deletedOld && !deletedDup) {
+      // Step 4: 删重名的那条
+      return {toolName: 'memory', args: {action: 'delete', filename: 'project_deploy-process-2.md'}};
+    }
+    // Step 5: done
+    return null;
+  }
+
+  // Memory tool — lint intent（必须排在 save 前面，避免被"记住"误吞）
+  if ((text.includes('lint 记忆') || text.includes('检查记忆') || text.includes('记忆体检') || text === 'lint') && !hasToolResults(prompt)) {
+    return {toolName: 'memory', args: {action: 'lint'}};
+  }
+
   // Memory tool — save intent
   if ((text.includes('记住') || text.includes('remember')) && !hasToolResults(prompt)) {
     const content = text.replace(/记住|remember/g, '').trim();
@@ -188,17 +234,65 @@ function detectToolIntent(prompt: any[]): ToolCallIntent | null {
         description: content.slice(0, 60),
         type,
         content,
-      }
+    }
     };
   }
 
-  // Memory tool — list/search intent
+  // Memory tool — list intent
   if ((text.includes('我的记忆') || text.includes('记忆列表') || text === 'memory list') && !hasToolResults(prompt)) {
     return {toolName: 'memory', args: {action: 'list'}};
   }
-  if ((text.includes('搜索记忆') || text.includes('memory search')) && !hasToolResults(prompt)) {
-    const query = text.replace(/搜索记忆|memory search/g, '').trim() || 'all';
+
+  // Memory tool — search intent（BM25）
+  if ((text.includes('搜记忆') || text.includes('搜索记忆') || text.includes('找记忆') || text.includes('memory search')) && !hasToolResults(prompt)) {
+    const query = text
+      .replace(/搜记忆|搜索记忆|找记忆|memory search/g, '')
+      .replace(/^[关于的有]+/, '')
+      .trim() || 'all';
     return {toolName: 'memory', args: {action: 'search', query}};
+  }
+
+  // RAG tool — ingest intent
+  if ((text.includes('导入') || text.includes('ingest')) && (text.includes('文档') || text.includes('.md')) && !hasToolResults(prompt)) {
+    const pathMatch = text.match(/([\w/.-]+\.md)/);
+    const path = pathMatch ? pathMatch[ 1 ] : 'docs/deployment-guide.md';
+    return {toolName: 'rag_ingest', args: {path}};
+  }
+
+  // Plugin tools — supabase (直接调用，不需要 tool_search)
+  if (!hasToolResults(prompt) && (
+    text.includes('有哪些表') || text.includes('表列表') || text.includes('list table')
+  )) {
+    return {toolName: 'supabase__list_tables', args: {}};
+  }
+  if (!hasToolResults(prompt) && (
+    text.includes('查用户') || text.includes('用户数据') || text.includes('query user')
+  )) {
+    return {toolName: 'supabase__query', args: {table: 'users'}};
+  }
+  if (!hasToolResults(prompt) && (
+    text.includes('查帖子') || text.includes('文章列表') || text.includes('query post')
+  )) {
+    return {toolName: 'supabase__query', args: {table: 'posts'}};
+  }
+  if (!hasToolResults(prompt) && (
+    text.includes('插入') || text.includes('新增') || text.includes('insert')
+  )) {
+    return {toolName: 'supabase__insert', args: {table: 'users', data: {name: '赵六', email: 'zhao@example.com', role: 'user'}}};
+  }
+  if (!hasToolResults(prompt) && (
+    text.includes('数据库') || text.includes('database') || text.includes('supabase') || text.includes('sql')
+  )) {
+    return {toolName: 'supabase__list_tables', args: {}};
+  }
+
+  // RAG tool — search intent
+  if (!hasToolResults(prompt) && (
+    text.includes('部署') || text.includes('deploy') || text.includes('事故') ||
+    text.includes('回滚') || text.includes('监控') || text.includes('迁移') ||
+    text.includes('知识库') || text.includes('搜索知识') || text.includes('查资料')
+  )) {
+    return {toolName: 'rag_search', args: {query: text}};
   }
 
   // 如果刚刚 tool_search 返回了结果，现在要调用发现的工具
@@ -215,9 +309,6 @@ function detectToolIntent(prompt: any[]): ToolCallIntent | null {
     if (toolResults.includes('navigate') || toolResults.includes('mcp__browser')) {
       return {toolName: 'mcp__browser__navigate', args: {url: 'https://example.com'}};
     }
-    if (toolResults.includes('supabase') || toolResults.includes('mcp__supabase')) {
-      return {toolName: 'mcp__supabase__list_tables', args: {}};
-    }
     return null;
   }
 
@@ -227,14 +318,11 @@ function detectToolIntent(prompt: any[]): ToolCallIntent | null {
   if (text.includes('issue') || text.includes('issues') || text.includes('github')) {
     return {toolName: 'tool_search', args: {query: 'mcp__github__list_issues'}};
   }
-  if (text.includes('notion') || text.includes('笔记') || text.includes('文档')) {
+  if (text.includes('notion') || text.includes('笔记')) {
     return {toolName: 'tool_search', args: {query: 'mcp__notion__search_pages'}};
   }
   if (text.includes('浏览器') || text.includes('browser') || text.includes('网页')) {
     return {toolName: 'tool_search', args: {query: 'mcp__browser__navigate'}};
-  }
-  if (text.includes('数据库') || text.includes('database') || text.includes('supabase') || text.includes('sql')) {
-    return {toolName: 'tool_search', args: {query: 'mcp__supabase__list_tables'}};
   }
 
   // 内置工具（非延迟，直接调用）
@@ -281,6 +369,8 @@ function detectToolIntent(prompt: any[]): ToolCallIntent | null {
 }
 
 function pickTextResponse(prompt: any[]): string {
+  const text = extractUserText(prompt);
+
   if (hasToolResults(prompt)) {
     const combined = getToolResultContent(prompt);
 
@@ -288,9 +378,43 @@ function pickTextResponse(prompt: any[]): string {
     if (combined.includes('已保存到记忆') || combined.includes('saved to memory')) {
       return TEXT_RESPONSES.memorySaved;
     }
+    // Dream 完成——两条都处理完了
+    if ((text.includes('dream') || text.includes('记忆整理')) &&
+      (combined.includes('project_deploy-process-2'))) {
+      return TEXT_RESPONSES.dreamFinished;
+    }
+    if (combined.includes('lint 报告') || combined.includes('记忆库健康')) {
+      return `${TEXT_RESPONSES.lintFinished}\n\n${combined}`;
+    }
+    if (combined.includes('BM25 搜索结果')) {
+      return `给你按相关度排好的搜索结果：\n${combined}`;
+    }
     if (combined.includes('记忆列表') || combined.includes('条记忆')) {
       return `这是你目前的记忆：\n${combined}`;
     }
+
+    // Plugin tool responses (supabase)
+    if (combined.includes('tables') && combined.includes('users')) {
+      return `数据库里有这些表：\n${combined}`;
+    }
+    if (combined.includes('"table"') && combined.includes('"rows"')) {
+      return `查询结果如下：\n${combined}`;
+    }
+    if (combined.includes('"success":true') && combined.includes('"inserted"')) {
+      return `数据插入成功：\n${combined}`;
+    }
+
+    // RAG tool responses
+    if (combined.includes('已导入') && combined.includes('文档片段')) {
+      return `文档已导入知识库。${combined}`;
+    }
+    if (combined.includes('综合分') || combined.includes('来源:')) {
+      return `根据知识库的检索结果：\n\n${combined}`;
+    }
+    if (combined.includes('知识库为空')) {
+      return combined;
+    }
+
     if (combined.includes('搜索结果') || combined.includes('没有找到')) {
       return combined;
     }
@@ -310,7 +434,6 @@ function pickTextResponse(prompt: any[]): string {
     return `工具返回了以下信息：\n${combined}`;
   }
 
-  const text = extractUserText(prompt);
   if (text.includes('你好') || text.includes('hello') || text.includes('hi'))
     return TEXT_RESPONSES.greeting;
   return TEXT_RESPONSES.default;
@@ -473,289 +596,3 @@ export function createMockModel() {
     },
   };
 }
-
-function lastToolResults(prompt: any[]): {toolName: string; output: string}[] {
-  const msgs = prompt || [];
-  const out: {toolName: string; output: string}[] = [];
-  for (let i = msgs.length - 1; i >= 0; i--) {
-    if (msgs[ i ].role === 'tool') {
-      const content = msgs[ i ].content || [];
-      for (const c of content) {
-        const val = c.output?.value || c.output || c.result || '';
-        out.unshift({toolName: c.toolName || '', output: String(val)});
-      }
-    } else if (msgs[ i ].role === 'user') break;
-  }
-  return out;
-}
-
-// ==== 三个 demo 场景识别 ====
-
-type Scenario = 'code-analysis' | 'research' | 'vibe-coding' | null;
-
-function detectDemoScenario(text: string): Scenario {
-  if (text.includes('TODO') || text.includes('todo') || text.includes('FIXME') ||
-    (text.includes('找出') && text.includes('项目')) || text.includes('扫一下')) {
-    return 'code-analysis';
-  }
-  if (/https?:\/\//.test(text)) {
-    return 'research';
-  }
-  if (text.includes('待办') || text.includes('做一个') && text.includes('应用') ||
-    text.includes('生成') && text.includes('网页') || text.includes('vibe')) {
-    return 'vibe-coding';
-  }
-  return null;
-}
-
-// ==== Demo 1: 代码分析 ====
-
-function planCodeAnalysis(): ToolCallIntent[] {
-  return [
-    {toolName: 'list_directory', args: {path: 'sample-project'}},
-    {toolName: 'grep', args: {pattern: 'TODO|FIXME', path: 'sample-project'}},
-  ];
-}
-
-function summarizeCodeAnalysis(results: {toolName: string; output: string}[]): string {
-  const grepResult = results.find(r => r.toolName === 'grep')?.output || '';
-  const lines = grepResult.split('\n').filter(l => l.includes(':') && (l.includes('TODO') || l.includes('FIXME')));
-
-  const fileGroups = new Map<string, string[]>();
-  for (const line of lines) {
-    const fileMatch = line.match(/^([^:]+):/);
-    if (fileMatch) {
-      const file = fileMatch[ 1 ];
-      if (!fileGroups.has(file)) fileGroups.set(file, []);
-      fileGroups.get(file)!.push(line);
-    }
-  }
-
-  let summary = `项目里一共找到 ${lines.length} 处 TODO/FIXME，分布在 ${fileGroups.size} 个文件：\n`;
-  for (const [ file, items ] of fileGroups) {
-    summary += `\n- ${file}（${items.length} 处）`;
-    for (const item of items.slice(0, 3)) {
-      const cleaned = item.replace(/^[^:]+:\d+:\s*\/\/\s*/, '   * ');
-      summary += `\n${cleaned}`;
-    }
-  }
-  summary += `\n\n建议优先处理 FIXME 标记的几条，那些是上线前必须修的硬伤。`;
-  return summary;
-}
-
-// ==== Demo 2: Research Agent ====
-
-function planResearch(text: string): ToolCallIntent[] {
-  const urls = text.match(/https?:\/\/[^\s,，。、]+/g) || [];
-  return urls.slice(0, 3).map(url => ({toolName: 'fetch_url', args: {url}}));
-}
-
-function summarizeResearch(results: {toolName: string; output: string}[]): string {
-  const fetched = results.filter(r => r.toolName === 'fetch_url');
-  if (fetched.length === 0) return '没有抓取到任何内容。';
-
-  if (fetched.length === 1) {
-    const content = fetched[ 0 ].output;
-    const sentences = content.split(/[\n。.]/).map(s => s.trim()).filter(s => s.length > 10).slice(0, 4);
-    return `读完文档，重点提炼如下：\n\n${sentences.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n\n核心思路：这份资料主要在讲工具调用的接口约定和执行模型，关键是用 inputSchema 描述参数、用 execute 实际运行。`;
-  }
-
-  let summary = `对比了 ${fetched.length} 个页面的内容：\n`;
-  for (let i = 0; i < fetched.length; i++) {
-    const first = fetched[ i ].output.split(/[\n。.]/).map(s => s.trim()).filter(Boolean)[ 0 ] || '';
-    summary += `\n${i + 1}. ${first.slice(0, 100)}`;
-  }
-  return summary;
-}
-
-// ==== Demo 3: Vibe Coding ====
-// 注意：app/index.html 已经预置在模板里（带 import maps + Babel 实时编译 loader）
-// Agent 只需要生成应用组件（App.tsx 是入口、必须 createRoot）+ 其他组件 + 样式
-
-const VIBE_BUTTON_TSX = `import React from 'react';
-
-interface ButtonProps {
-  onClick: () => void;
-  children: React.ReactNode;
-  variant?: 'primary' | 'danger';
-}
-
-export function Button({ onClick, children, variant = 'primary' }: ButtonProps) {
-  return (
-    <button className={\`btn btn-\${variant}\`} onClick={onClick}>
-      {children}
-    </button>
-  );
-}
-`;
-
-const VIBE_APP_TSX = `import React, { useState } from 'react';
-import { createRoot } from 'react-dom/client';
-import { Button } from './Button.tsx';
-
-interface Todo {
-  id: number;
-  text: string;
-  done: boolean;
-}
-
-function App() {
-  const [todos, setTodos] = useState<Todo[]>([
-    { id: 1, text: '体验一下 Super Agent 生成的应用', done: false },
-    { id: 2, text: '试试在真实模型上让它做别的页面', done: false },
-  ]);
-  const [input, setInput] = useState('');
-
-  function add() {
-    if (!input.trim()) return;
-    setTodos([...todos, { id: Date.now(), text: input, done: false }]);
-    setInput('');
-  }
-
-  function toggle(id: number) {
-    setTodos(todos.map(t => t.id === id ? { ...t, done: !t.done } : t));
-  }
-
-  function remove(id: number) {
-    setTodos(todos.filter(t => t.id !== id));
-  }
-
-  const remaining = todos.filter(t => !t.done).length;
-
-  return (
-    <div className="container">
-      <h1>📝 我的待办清单</h1>
-      <p className="subtitle">还有 {remaining} 件事没做</p>
-
-      <div className="input-row">
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') add(); }}
-          placeholder="输入新的待办事项..."
-        />
-        <Button onClick={add}>添加</Button>
-      </div>
-
-      <ul className="todo-list">
-        {todos.map(todo => (
-          <li key={todo.id} className={todo.done ? 'done' : ''}>
-            <span onClick={() => toggle(todo.id)}>{todo.text}</span>
-            <Button variant="danger" onClick={() => remove(todo.id)}>×</Button>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-createRoot(document.getElementById('root')!).render(<App />);
-`;
-
-const VIBE_STYLES_CSS = `* { box-sizing: border-box; margin: 0; padding: 0; }
-
-body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  min-height: 100vh;
-  padding: 40px 20px;
-  color: #333;
-}
-
-.container {
-  max-width: 480px;
-  margin: 0 auto;
-  background: white;
-  border-radius: 16px;
-  padding: 32px;
-  box-shadow: 0 20px 60px rgba(0,0,0,0.2);
-}
-
-h1 { font-size: 28px; margin-bottom: 8px; }
-.subtitle { color: #888; margin-bottom: 24px; font-size: 14px; }
-
-.input-row { display: flex; gap: 8px; margin-bottom: 20px; }
-
-.input-row input {
-  flex: 1; padding: 10px 14px; border: 1px solid #e0e0e0;
-  border-radius: 8px; font-size: 14px; outline: none;
-}
-.input-row input:focus { border-color: #667eea; }
-
-.btn {
-  padding: 10px 16px; border: none; border-radius: 8px;
-  cursor: pointer; font-size: 14px; font-weight: 500;
-  transition: transform 0.1s;
-}
-.btn:hover { transform: translateY(-1px); }
-.btn-primary { background: #667eea; color: white; }
-.btn-danger { background: #ff6b6b; color: white; padding: 4px 10px; }
-
-.todo-list { list-style: none; }
-.todo-list li {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 0; border-bottom: 1px solid #f0f0f0;
-}
-.todo-list li span { cursor: pointer; flex: 1; }
-.todo-list li.done span { text-decoration: line-through; color: #aaa; }
-`;
-
-function planVibeCoding(): ToolCallIntent[] {
-  return [
-    {toolName: 'write_file', args: {path: 'app/styles.css', content: VIBE_STYLES_CSS}},
-    {toolName: 'write_file', args: {path: 'app/Button.tsx', content: VIBE_BUTTON_TSX}},
-    {toolName: 'write_file', args: {path: 'app/App.tsx', content: VIBE_APP_TSX}},
-    {toolName: 'start_preview', args: {}},
-  ];
-}
-
-function summarizeVibeCoding(results: {toolName: string; output: string}[]): string {
-  const previewMsg = results.find(r => r.toolName === 'start_preview')?.output || '';
-  return `搞定！我已经在 app/ 目录下生成了一个待办清单应用：
-  - styles.css  样式（紫色渐变背景、卡片式布局）
-  - Button.tsx  可复用的按钮组件
-  - App.tsx     主应用入口（用 createRoot 渲染到 #root）
-
-模板自带的 app/index.html 是固定的 ESM bootstrap，用 import maps + Babel Standalone 在浏览器里实时编译 TSX，不需要重新生成。
-
-${previewMsg}`;
-}
-
-function detectLegacyToolIntent(prompt: any[]): ToolCallIntent | null {
-  const text = extractUserText(prompt).toLowerCase();
-  if (text.includes('测试死循环')) return {toolName: 'get_weather', args: {city: '北京'}};
-  if (hasToolResults(prompt)) return null;
-  if (text.includes('测试截断')) return {toolName: 'read_file', args: {path: 'sample-data.txt'}};
-  if (text.includes('测试编辑')) return {toolName: 'edit_file', args: {path: 'sample-data.txt', old_string: '一、工具注册机制', new_string: '一、工具注册机制（已更新）'}};
-  if (text.includes('测试搜索')) return {toolName: 'grep', args: {pattern: 'export', path: 'src'}};
-  if (text.includes('测试glob')) return {toolName: 'glob', args: {pattern: '**/*.ts'}};
-  if (text.includes('测试bash')) return {toolName: 'bash', args: {command: 'echo "Hello from bash!" && date'}};
-  if (text.includes('目录') || text.includes('ls')) return {toolName: 'list_directory', args: {path: '.'}};
-  const fileMatch = text.match(/(\S+\.[\w]+)/);
-  if (fileMatch && (text.includes('读') || text.includes('看'))) {
-    return {toolName: 'read_file', args: {path: fileMatch[ 1 ]}};
-  }
-  return null;
-}
-
-// ==== Mock model 主入口 ====
-
-function pickIntents(prompt: any[]): ToolCallIntent[] | null {
-  if (hasToolResults(prompt)) return null;
-  const text = extractUserText(prompt);
-  const scenario = detectDemoScenario(text);
-  if (scenario === 'code-analysis') return planCodeAnalysis();
-  if (scenario === 'research') return planResearch(text);
-  if (scenario === 'vibe-coding') return planVibeCoding();
-
-  const parallel = detectParallelIntent(text);
-  if (parallel) return parallel;
-  const legacy = detectLegacyToolIntent(prompt);
-  return legacy ? [ legacy ] : null;
-}
-
-
-const USAGE = {
-  inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
-  outputTokens: { total: 20, text: 20, reasoning: undefined },
-};

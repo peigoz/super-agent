@@ -22,8 +22,10 @@ import {SqliteVectorStore} from './rag/sqlite-store';
 import {createRagTools} from './tools/rag-tools';
 import process from 'node:process';
 import {SkillLoader, skillRepoter} from './skills/loader';
-import {PluginManager, pluginRepoter, type PluginDefinition} from './plugins/manager';
+import {PluginManager, pluginRepoter} from './plugins/manager';
 import {supabasePlugin} from './plugins/supabase-plugin';
+import {FeishuChannel} from './channels/feishu';
+import {ChannelGateway} from './channels/gateway';
 
 const qwen = createOpenAI({
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
@@ -55,15 +57,11 @@ registry.register(...createRagTools(vectorStore, embedFn));
 /** End ----RAG---- End */
 
 /** Start ----Skills---- Start */
+// [TODO]: 实现 skill-tool 给 AI 动态启动卸载 skill
 const skillLoader = new SkillLoader('.');
 skillLoader.load();
 skillRepoter(skillLoader)
 /** End ----Skills---- End */
-
-/** Start ----Plugins---- Start */
-const pluginManager = new PluginManager(registry);
-pluginManager.availablePlugins.set('supabase', supabasePlugin)
-/** End ----Plugins---- End */
 
 async function connectGithubMCP() {
   const githubToken = process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
@@ -101,6 +99,55 @@ async function connectGithubMCP() {
   console.log(`  已注册 ${tools.length} 个 Mock MCP 工具`);
 }
 
+/** Start ----SystemPrompt---- Start */
+// Prompt Pipe 组装 system prompt
+// 保持 prompt 前缀不变，计算结果就能复用。不变的 section 放前面，变的放后面：
+// coreRules — 永远不变，放最前面，cache 稳稳命中。
+// toolGuide — 工具数量基本固定，变化很少。
+// deferredTools — 所有的工具列表也基本固定，放中间。
+// sessionContext — 每次启动都不同，放最后面。
+const builder = new PromptBuilder()
+  .pipe('coreRules', coreRules())
+  .pipe('toolGuide', toolGuide())
+  .pipe('deferredTools', deferredTools())
+  .pipe('memoryContext', memoryContext(memoryStore))
+  .pipe('ragContext', ragContext(vectorStore))
+  .pipe('skillContext', () => skillLoader.buildPromptSection())
+  .pipe('sessionContext', sessionContext());
+
+
+// 添加长期记忆后，每轮的 system-prompt 可能会变，改为函数实时构建
+function makePromptCtx(messages: ModelMessage[]): PromptContext {
+  return {
+    toolCount: registry.getActiveTools().length,
+    deferredToolSummary: registry.getDeferredToolSummary(),
+    sessionMessageCount: messages.length,
+    sessionId: 'default',
+  };
+}
+/** End ----SystemPrompt---- End */
+
+/** Start ----Channel---- Start */
+const gateway = new ChannelGateway({
+  model,
+  registry,
+  buildSystem: () => builder.build(makePromptCtx([])),
+});
+
+const FEISHU_PORT = Number(process.env.FEISHU_PORT || '3000');
+const feishuChannel = new FeishuChannel({
+  appId: process.env.FEISHU_APP_ID || '',
+  appSecret: process.env.FEISHU_APP_SECRET || '',
+  port: FEISHU_PORT,
+});
+gateway.register(feishuChannel);
+/** End ----Channel---- End */
+
+/** Start ----Plugins---- Start */
+const pluginManager = new PluginManager(registry, gateway);
+pluginManager.availablePlugins.set('supabase', supabasePlugin)
+/** End ----Plugins---- End */
+
 async function main() {
   await connectGithubMCP()
 
@@ -114,6 +161,9 @@ async function main() {
       console.log(`  ✗ ${name} — 加载失败`);
     }
   }
+
+  console.log('启动 Channel...');
+  await gateway.startAll();
 
   toolsRepoter(registry);
 
@@ -134,31 +184,7 @@ async function main() {
     console.log(`\n[Session] 新会话`);
   }
 
-  // Prompt Pipe 组装 system prompt
-  // 保持 prompt 前缀不变，计算结果就能复用。不变的 section 放前面，变的放后面：
-  // coreRules — 永远不变，放最前面，cache 稳稳命中。
-  // toolGuide — 工具数量基本固定，变化很少。
-  // deferredTools — 所有的工具列表也基本固定，放中间。
-  // sessionContext — 每次启动都不同，放最后面。
-  const builder = new PromptBuilder()
-    .pipe('coreRules', coreRules())
-    .pipe('toolGuide', toolGuide())
-    .pipe('deferredTools', deferredTools())
-    .pipe('memoryContext', memoryContext(memoryStore))
-    .pipe('ragContext', ragContext(vectorStore))
-    .pipe('skillContext', () => skillLoader.buildPromptSection())
-    .pipe('sessionContext', sessionContext());
-
-  // 添加长期记忆后，每轮的 system-prompt 可能会变，改为函数实时构建
-  function makePromptCtx(): PromptContext {
-    return {
-      toolCount: registry.getActiveTools().length,
-      deferredToolSummary: registry.getDeferredToolSummary(),
-      sessionMessageCount: messages.length,
-      sessionId: 'default',
-    };
-  }
-  const promptCtx = makePromptCtx()
+  const promptCtx = makePromptCtx(messages)
   // Debug: 显示 Prompt Pipe 各模块状态
   builder.debug(promptCtx);
 
@@ -173,6 +199,7 @@ async function main() {
       const trimmed = input.trim();
       if (!trimmed || trimmed === 'exit') {
         console.log('Bye!');
+        await gateway.stopAll();  
         await pluginManager.unloadAll();
         rl.close();
         return;
@@ -181,7 +208,7 @@ async function main() {
       const ctx: CommandContext = {
         messages, timestamps, registry, tracker, model,
         builder, makePromptCtx, ask,
-        skillLoader, pluginManager,
+        skillLoader, pluginManager, gateway,
         sessionStore, memoryStore, vectorStore,
       };
       const handled = dispatch(trimmed, ctx);
@@ -197,7 +224,7 @@ async function main() {
       const turnDefense = applyDefense(messages, timestamps);
       messages = turnDefense.messages;
 
-      const currentSystem = builder.build(makePromptCtx());
+      const currentSystem = builder.build(makePromptCtx(messages));
       const beforeLen = messages.length;
 
       await agentLoop(model, registry, messages, currentSystem, tracker);

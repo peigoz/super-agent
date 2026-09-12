@@ -20,6 +20,17 @@ when_to_use: "当用户要求做一个网页应用、待办应用、任意 web d
 
 1. `app/styles.css` — 应用样式
 2. `app/App.tsx` — **必须**用 `import { createRoot } from 'react-dom/client'` 把组件渲染到 `document.getElementById('root')`
+  ```app.tsx
+  import { createRoot } from 'react-dom/client'
+
+  // component start
+  // ...
+  // component end
+
+  // Render the app
+  const root = createRoot(document.getElementById('root')!);
+  root.render(<App />);
+  ```
 3. `app/Button.tsx` 或其他组件 `.tsx` — 可被 `App.tsx` import
 
 其他约束：
