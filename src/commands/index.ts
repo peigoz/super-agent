@@ -15,6 +15,8 @@ import {pluginCommands} from './plugin';
 import type {PluginManager} from '../plugins/manager';
 import type {ChannelGateway} from '../channels/gateway';
 import {channelCommands} from './channel';
+import type {HookPipeline} from '../security/hooks';
+import {securityCommands} from './security';
 
 export interface CommandContext {
   messages: ModelMessage[];
@@ -30,6 +32,7 @@ export interface CommandContext {
   skillLoader: SkillLoader
   pluginManager: PluginManager
   gateway: ChannelGateway
+  hookPipeline: HookPipeline
   [ key: string ]: any;
 }
 
@@ -54,4 +57,5 @@ export const dispatch = createDispatcher([
   ...skillCommands,
   ...pluginCommands,
   ...channelCommands,
+  ...securityCommands,
 ]);

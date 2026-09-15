@@ -1,7 +1,9 @@
+import type {HookFn} from 'node:test';
 import type {ChannelGateway} from '../channels/gateway';
 import type {ChannelDefinition} from '../channels/types';
+import type {HookPipeline, PreToolHook} from '../security/hooks';
 import type {ToolRegistry, ToolDefinition} from '../tools/registry';
-import type {PluginDefinition, PluginConfig, PluginApi} from './types';
+import type {PluginDefinition, PluginConfig, PluginApi, HookType} from './types';
 
 // 插件系统五个设计决策:
 // 1. 接口契约（PluginDefinition）——定义清楚"一个插件长什么样"。这是所有插件系统的起点。不管你做的是 Agent、编辑器、还是构建工具，第一步都是定义这个接口。
@@ -19,12 +21,14 @@ export class PluginManager {
   private plugins = new Map<string, LoadedPlugin>();
   private registry: ToolRegistry;
   private gateway: ChannelGateway;
+  private hookPipeline: HookPipeline;
 
   public availablePlugins = new Map<string, PluginDefinition>();
 
-  constructor(registry: ToolRegistry, gateway: ChannelGateway) {
+  constructor(registry: ToolRegistry, gateway: ChannelGateway, hookPipeline: HookPipeline) {
     this.registry = registry;
     this.gateway = gateway;
+    this.hookPipeline = hookPipeline;
   }
 
   async load(definition: PluginDefinition, config?: PluginConfig): Promise<string[]> {
@@ -54,6 +58,15 @@ export class PluginManager {
       },
       registerChannel: (channel: ChannelDefinition) => {
         this.gateway.register(channel)
+      },
+      registerHook: (type, config) => {
+        if (type === 'pre') {
+          this.hookPipeline.registerPre(config.name, config.fn as PreToolHook)
+        }
+
+        if (type === 'post') {
+          this.hookPipeline.registerPost(config.name, config.fn)
+        }
       },
       getConfig: () => resolvedConfig,
       log: (message: string) => {

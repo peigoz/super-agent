@@ -1,6 +1,4 @@
-import type {CommandHandler} from './index.js';
-import type {ChannelGateway} from '../channels/gateway.js';
-import {gateway} from 'ai';
+import type {CommandHandler} from './index';
 
 export const channelCommands: CommandHandler[] = [
   (cmd, ctx) => {

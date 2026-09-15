@@ -26,6 +26,7 @@ import {PluginManager, pluginRepoter} from './plugins/manager';
 import {supabasePlugin} from './plugins/supabase-plugin';
 import {FeishuChannel} from './channels/feishu';
 import {ChannelGateway} from './channels/gateway';
+import {HookPipeline} from './security/hooks';
 
 const qwen = createOpenAI({
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
@@ -127,6 +128,34 @@ function makePromptCtx(messages: ModelMessage[]): PromptContext {
 }
 /** End ----SystemPrompt---- End */
 
+
+/** Start ----Hooks---- Start */
+const hookPipeline = new HookPipeline();
+
+// 示例 Pre Hook: 写文件前记录日志
+hookPipeline.registerPre('audit-log', (toolName, input) => {
+  if (toolName === 'write_file' || toolName === 'edit_file') {
+    const path = (input as any)?.path || 'unknown';
+    console.log(`  [audit] 文件写入操作: ${toolName} → ${path}`);
+  }
+  return {action: 'allow'};
+});
+
+// 示例 Post Hook: 给 bash 输出加时间戳
+hookPipeline.registerPost('bash-timestamp', (toolName, _input, output) => {
+  if (toolName === 'bash') {
+    const timestamp = new Date().toISOString();
+    return {
+      action: 'modify',
+      modifiedOutput: `[${timestamp}]\n${output}`,
+    };
+  }
+  return {action: 'allow'};
+});
+
+registry.setHookPipeline(hookPipeline);
+/** End ----Hooks---- End */
+
 /** Start ----Channel---- Start */
 const gateway = new ChannelGateway({
   model,
@@ -144,7 +173,7 @@ gateway.register(feishuChannel);
 /** End ----Channel---- End */
 
 /** Start ----Plugins---- Start */
-const pluginManager = new PluginManager(registry, gateway);
+const pluginManager = new PluginManager(registry, gateway, hookPipeline);
 pluginManager.availablePlugins.set('supabase', supabasePlugin)
 /** End ----Plugins---- End */
 
@@ -208,7 +237,7 @@ async function main() {
       const ctx: CommandContext = {
         messages, timestamps, registry, tracker, model,
         builder, makePromptCtx, ask,
-        skillLoader, pluginManager, gateway,
+        skillLoader, pluginManager, gateway, hookPipeline,
         sessionStore, memoryStore, vectorStore,
       };
       const handled = dispatch(trimmed, ctx);

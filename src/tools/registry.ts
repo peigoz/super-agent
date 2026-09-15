@@ -1,5 +1,8 @@
 import {jsonSchema} from 'ai';
 import type {MCPClient, MockMCPClient} from './mcp-client';
+import {canUseTool, type Role} from '../security/roles';
+import {classifyBashCommand} from '../security/bash-classifier';
+import type {HookPipeline} from '../security/hooks';
 
 export interface ToolDefinition {
   name: string;
@@ -10,6 +13,7 @@ export interface ToolDefinition {
   // 元数据——给 Agent Loop 做决策用
   isConcurrencySafe?: boolean;  // 能否并行,并发安全性不是按工具名决定的，而是按行为决定的
   isReadOnly?: boolean;         // 是否只读
+  profile?: string[];
   shouldDefer?: boolean;    // 是否延迟加载
   searchHint?: string;      // 搜索提示词，帮助 ToolSearch 匹配
   maxResultChars?: number;      // 结果最大长度
@@ -28,8 +32,11 @@ export class ToolRegistry {
   // MCP 客户端列表，注册 MCP Server 时会把客户端存起来，方便统一关闭
   private mcpClients: Array<MCPClient | MockMCPClient> = [];
 
-  // 工具懒加载
+  // 工具动态加载
+  private activeProfile: string = 'full';
   private discoveredTools = new Set<string>();
+  private currentRole: Role = 'owner';
+  private hookPipeline?: HookPipeline;
 
   register(...tools: ToolDefinition[]): void {
     for (const tool of tools) {
@@ -90,11 +97,34 @@ export class ToolRegistry {
       const executeFn = tool.execute;
       const isSafe = tool.isConcurrencySafe === true;
       const registry = this;
+      const hookPipeline = registry.hookPipeline
 
       result[ name ] = {
         description: tool.description,
         inputSchema: jsonSchema(tool.parameters as any),
         execute: async (input: any) => {
+          // bash 操作拦截
+          if (name === 'bash' && input?.command) {
+            const risk = classifyBashCommand(input.command);
+            if (risk.level === 'dangerous') {
+              return `[拒绝执行] 检测到危险操作: ${risk.reason}\n命令: ${input.command}`;
+            }
+            if (risk.level === 'moderate') {
+              console.log(`  [安全] ⚠ ${risk.reason}: ${input.command}`);
+            }
+          }
+
+          // Pre Hook
+          if (hookPipeline) {
+            const preResult = await hookPipeline.runPre(name, input);
+            if (preResult.action === 'block') {
+              return `[Hook 拦截] ${preResult.reason || '操作被阻止'}`;
+            }
+            if (preResult.action === 'modify' && preResult.modifiedInput !== undefined) {
+              input = preResult.modifiedInput;
+            }
+          }
+
           // 在真正执行前先按 isConcurrencySafe 获取锁
           if (isSafe) {
             await registry.acquireConcurrent();
@@ -106,7 +136,17 @@ export class ToolRegistry {
           try {
             const raw = await executeFn(input);
             const text = typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2);
-            return truncateResult(text, maxChars);
+            const output = truncateResult(text, maxChars);
+
+            // Post Hook
+            if (hookPipeline) {
+              const postResult = await hookPipeline.runPost(name, input, output);
+              if (postResult.modifiedOutput !== undefined) {
+                return String(postResult.modifiedOutput);
+              }
+            }
+
+            return output
           } finally {
             // 不管成功还是抛异常，锁都要释放
             if (isSafe) {
@@ -189,6 +229,25 @@ export class ToolRegistry {
     this.mcpClients = [];
   }
   /** End ----MCP 注册---- End */
+  setProfile(profile: string): void {
+    this.activeProfile = profile;
+  }
+
+  getProfile(): string {
+    return this.activeProfile;
+  }
+
+  setRole(role: Role): void {
+    this.currentRole = role;
+  }
+
+  getRole(): Role {
+    return this.currentRole;
+  }
+
+  setHookPipeline(pipeline: HookPipeline): void {
+    this.hookPipeline = pipeline;
+  }
 
   /** Start ----工具延迟加载---- Start */
   // 更激进的方案：ToolSearch + CallTool 双工具代理模式：
@@ -197,9 +256,18 @@ export class ToolRegistry {
   // 代价是模型不是通过 tools 参数里的结构化 Schema 来"认识"工具的，而是通过对话历史里的文本描述来理解参数格式，参数复杂的工具准确率会略低一些。
   getActiveTools(): ToolDefinition[] {
     return this.getAll().filter(tool => {
+      if (tool.profile && !tool.profile.includes(this.activeProfile)) {
+        return false;
+      }
+
       if (tool.shouldDefer && !this.discoveredTools.has(tool.name)) {
         return false;
       }
+
+      if (!canUseTool(this.currentRole, tool.name)) {
+        return false;
+      }
+
       return true;
     });
   }
@@ -214,7 +282,7 @@ export class ToolRegistry {
 
     for (const name of names) {
       const tool = this.tools.get(name);
-      if (tool && tool.name !== 'tool_search') {
+      if (tool && tool.name !== 'tool_search' && canUseTool(this.currentRole, tool.name)) {
         results.push(tool);
         this.discoveredTools.add(tool.name);
       }
