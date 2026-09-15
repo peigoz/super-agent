@@ -166,6 +166,8 @@ export class ToolRegistry {
     let deferred = 0;
 
     for (const tool of this.tools.values()) {
+      if (tool.profile && !tool.profile.includes(this.activeProfile)) continue;
+
       const schemaSize = JSON.stringify({
         name: tool.name,
         description: tool.description,
@@ -211,6 +213,7 @@ export class ToolRegistry {
         shouldDefer: true,
         searchHint: `${serverName} ${tool.name} ${tool.description}`,
         maxResultChars: 3000,
+        profile: [ 'full' ],
         execute: async (input: any) => {
           return toolClient.callTool(originalName, input);
         },

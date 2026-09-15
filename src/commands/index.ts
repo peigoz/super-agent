@@ -4,19 +4,6 @@ import type {PromptBuilder, PromptContext} from '../context/prompt-builder';
 import type {UsageTracker} from '../usage/tracker';
 import type {SessionStore} from '../session/store';
 import type {MemoryStore} from '../memory/store';
-import {contextCommands} from './context';
-import {debugCommands} from './debug';
-import {memoryCommands} from './memory';
-import {ragCommands} from './rag';
-import {dreamCommands} from './dream';
-import type {SkillLoader} from '../skills/loader';
-import {skillCommands} from './skill';
-import {pluginCommands} from './plugin';
-import type {PluginManager} from '../plugins/manager';
-import type {ChannelGateway} from '../channels/gateway';
-import {channelCommands} from './channel';
-import type {HookPipeline} from '../security/hooks';
-import {securityCommands} from './security';
 
 export interface CommandContext {
   messages: ModelMessage[];
@@ -29,10 +16,6 @@ export interface CommandContext {
   makePromptCtx: (messages: ModelMessage[]) => PromptContext;
   ask: () => void;
   memoryStore?: MemoryStore;
-  skillLoader: SkillLoader
-  pluginManager: PluginManager
-  gateway: ChannelGateway
-  hookPipeline: HookPipeline
   [ key: string ]: any;
 }
 
@@ -47,15 +30,3 @@ export function createDispatcher(handlers: CommandHandler[]): CommandHandler {
     return false;
   };
 }
-
-export const dispatch = createDispatcher([
-  ...debugCommands,
-  ...contextCommands,
-  ...memoryCommands,
-  ...ragCommands,
-  ...dreamCommands,
-  ...skillCommands,
-  ...pluginCommands,
-  ...channelCommands,
-  ...securityCommands,
-]);

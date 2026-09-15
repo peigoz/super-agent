@@ -13,7 +13,7 @@ import {estimateTokens, microcompact, summarize} from './context/compressor';
 import {applyDefense, estimateMessageTokens, TokenTracker, truncateToolResults, ttlPrune} from './context/defense';
 import {UsageTracker} from './usage/tracker';
 import {createToolSearchTool} from './tools/tool-search';
-import {dispatch, type CommandContext} from './commands';
+import {createDispatcher, type CommandContext} from './commands';
 import {MemoryStore} from './memory/store';
 import {createMemoryTool} from './tools/memory-tools';
 import {createDashScopeEmbedder, createMockEmbedder, embed} from './rag/embedder';
@@ -27,6 +27,18 @@ import {supabasePlugin} from './plugins/supabase-plugin';
 import {FeishuChannel} from './channels/feishu';
 import {ChannelGateway} from './channels/gateway';
 import {HookPipeline} from './security/hooks';
+import {CronService} from './cron/service';
+import {createCronTool} from './tools/cron-tools';
+import {contextCommands} from './commands/context';
+import {createCronCommands} from './commands/cron';
+import {debugCommands} from './commands/debug';
+import {dreamCommands} from './commands/dream';
+import {memoryCommands} from './commands/memory';
+import {ragCommands} from './commands/rag';
+import {createSecurityCommands} from './commands/security';
+import {createChannelCommands} from './commands/channel';
+import {createPluginCommands} from './commands/plugin';
+import {createSkillCommands} from './commands/skill';
 
 const qwen = createOpenAI({
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
@@ -156,6 +168,12 @@ hookPipeline.registerPost('bash-timestamp', (toolName, _input, output) => {
 registry.setHookPipeline(hookPipeline);
 /** End ----Hooks---- End */
 
+/** Start ----Cron---- Start */
+// ── Cron Service ────────────────────────────────
+const cronService = new CronService('.');
+registry.register(createCronTool(cronService));
+/** End ----Cron---- End */
+
 /** Start ----Channel---- Start */
 const gateway = new ChannelGateway({
   model,
@@ -177,6 +195,19 @@ const pluginManager = new PluginManager(registry, gateway, hookPipeline);
 pluginManager.availablePlugins.set('supabase', supabasePlugin)
 /** End ----Plugins---- End */
 
+/** Start ----Command---- Start */
+
+const dispatch = createDispatcher([
+  ...debugCommands, ...contextCommands, ...memoryCommands,
+  ...ragCommands, ...dreamCommands,
+  ...createSkillCommands(skillLoader),
+  ...createPluginCommands(pluginManager),
+  ...createChannelCommands(gateway),
+  ...createSecurityCommands(registry, hookPipeline),
+  ...createCronCommands(cronService),
+]);
+/** End ----Command---- End */
+
 async function main() {
   await connectGithubMCP()
 
@@ -193,6 +224,27 @@ async function main() {
 
   console.log('启动 Channel...');
   await gateway.startAll();
+
+  cronService.load();
+  cronService.setExecutor({
+    runAgentPrompt: async (prompt, _timeout) => {
+      const cronMessages: ModelMessage[] = [ {role: 'user', content: prompt} ];
+      const system = builder.build(makePromptCtx(messages));
+      await agentLoop(model, registry, cronMessages, system);
+      const lastMsg = cronMessages[ cronMessages.length - 1 ];
+      if (!lastMsg) return '(无输出)';
+      if (typeof lastMsg.content === 'string') return lastMsg.content;
+      if (Array.isArray(lastMsg.content)) {
+        return lastMsg.content
+          .filter((p: any) => p.type === 'text')
+          .map((p: any) => p.text)
+          .join('') || '(无输出)';
+      }
+      return String(lastMsg.content);
+    },
+    notify: (message) => {console.log(`\n${message}`);},
+  });
+  cronService.start();
 
   toolsRepoter(registry);
 
@@ -228,6 +280,7 @@ async function main() {
       const trimmed = input.trim();
       if (!trimmed || trimmed === 'exit') {
         console.log('Bye!');
+        cronService.stop();
         await gateway.stopAll();  
         await pluginManager.unloadAll();
         rl.close();
@@ -237,7 +290,6 @@ async function main() {
       const ctx: CommandContext = {
         messages, timestamps, registry, tracker, model,
         builder, makePromptCtx, ask,
-        skillLoader, pluginManager, gateway, hookPipeline,
         sessionStore, memoryStore, vectorStore,
       };
       const handled = dispatch(trimmed, ctx);
