@@ -8,7 +8,7 @@ import {type UsageTracker, normalizeUsage} from '../usage/tracker';
 const MAX_STEPS = 10;
 const MAX_RETRIES = 3;
 
-const TOKEN_BUDGET = 15000;
+const TOKEN_BUDGET = 200_000;
 
 export interface BudgetState {
   used: number;

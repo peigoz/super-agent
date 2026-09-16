@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import type {CronJobConfig, RunLog} from './types.js';
+import type {CronJobConfig, RunLog} from './types';
 
 const JOBS_FILE = '.cron/jobs.json';
 const LOGS_FILE = '.cron/logs.jsonl';

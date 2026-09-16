@@ -1,6 +1,6 @@
-import type {CronJobConfig, CronJobState, RunLog, JobPayload} from './types.js';
-import {parseSchedule, getNextCronTime} from './parser.js';
-import {CronStore} from './store.js';
+import type {CronJobConfig, CronJobState, RunLog, JobPayload} from './types';
+import {parseSchedule, getNextCronTime} from './parser';
+import {CronStore} from './store';
 
 const QUOTES = [
   '\u201C知之为知之，不知为不知，是知也。\u201D \u2014\u2014 孔子',

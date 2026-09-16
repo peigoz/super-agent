@@ -39,6 +39,10 @@ import {createSecurityCommands} from './commands/security';
 import {createChannelCommands} from './commands/channel';
 import {createPluginCommands} from './commands/plugin';
 import {createSkillCommands} from './commands/skill';
+import {SubAgentRegistry} from './multiple-agent/registry';
+import type {SpawnContext} from './multiple-agent/spawn';
+import {createSpawnTool} from './tools/spawn-tools';
+import {createAgentCommands} from './commands/agent';
 
 const qwen = createOpenAI({
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
@@ -190,13 +194,30 @@ const feishuChannel = new FeishuChannel({
 gateway.register(feishuChannel);
 /** End ----Channel---- End */
 
+/** Start ----SubAgent---- Start */
+// ── Sub-Agent ────────────────────────────────────────
+const agentRegistry = new SubAgentRegistry({maxSpawnDepth: 1, maxConcurrent: 3});
+
+function getSpawnCtx(): SpawnContext {
+  return {
+    model,
+    registry,
+    agentRegistry,
+    buildSystem: () => builder.build(makePromptCtx([])),
+    currentDepth: 0,
+  };
+}
+
+registry.register(createSpawnTool(agentRegistry, getSpawnCtx));
+
+/** End ----SubAgent---- End */
+
 /** Start ----Plugins---- Start */
 const pluginManager = new PluginManager(registry, gateway, hookPipeline);
 pluginManager.availablePlugins.set('supabase', supabasePlugin)
 /** End ----Plugins---- End */
 
 /** Start ----Command---- Start */
-
 const dispatch = createDispatcher([
   ...debugCommands, ...contextCommands, ...memoryCommands,
   ...ragCommands, ...dreamCommands,
@@ -205,6 +226,7 @@ const dispatch = createDispatcher([
   ...createChannelCommands(gateway),
   ...createSecurityCommands(registry, hookPipeline),
   ...createCronCommands(cronService),
+  ...createAgentCommands(agentRegistry),
 ]);
 /** End ----Command---- End */
 

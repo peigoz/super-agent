@@ -89,6 +89,27 @@ export class ToolRegistry {
     for (const resolve of waiting) resolve();
   }
 
+  toAISDKFormatUnlocked(excludeTools?: Set<string>): Record<string, any> {
+    const result: Record<string, any> = {};
+    const activeTools = this.getActiveTools()
+      .filter(t => !(excludeTools && excludeTools.has(t.name)));
+
+    for (const tool of activeTools) {
+      const maxChars = tool.maxResultChars;
+      const executeFn = tool.execute;
+      result[ tool.name ] = {
+        description: tool.description,
+        inputSchema: jsonSchema(tool.parameters as any),
+        execute: async (input: any) => {
+          const raw = await executeFn(input);
+          const text = typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2);
+          return truncateResult(text, maxChars);
+        },
+      };
+    }
+    return result;
+  }
+
   toAISDKFormat(): Record<string, any> {
     const result: Record<string, any> = {};
     const tools = this.getActiveTools().map(t => [ t.name, t ] as const);

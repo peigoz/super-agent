@@ -1,5 +1,5 @@
 import {Cron} from 'croner';
-import type {ScheduleType} from './types.js';
+import type {ScheduleType} from './types';
 
 export interface ParsedSchedule {
   type: ScheduleType;

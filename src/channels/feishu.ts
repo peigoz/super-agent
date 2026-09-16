@@ -1,4 +1,4 @@
-import type {ChannelDefinition, IncomingMessage, OutgoingMessage} from './types.js';
+import type {ChannelDefinition, IncomingMessage, OutgoingMessage} from './types';
 
 interface FeishuConfig {
   appId: string;

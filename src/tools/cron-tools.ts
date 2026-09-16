@@ -1,6 +1,6 @@
-import type {ToolDefinition} from './registry.js';
-import type {CronService} from '../cron/service.js';
-import type {CronJobConfig, ScheduleType} from '../cron/types.js';
+import type {ToolDefinition} from './registry';
+import type {CronService} from '../cron/service';
+import type {CronJobConfig, ScheduleType} from '../cron/types';
 
 export function createCronTool(cronService: CronService): ToolDefinition {
   return {
