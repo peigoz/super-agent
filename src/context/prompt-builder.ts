@@ -1,4 +1,5 @@
 import type {MemoryStore} from "../memory/store";
+import type {SubAgentRegistry} from "../multiple-agent/registry";
 import type {SqliteVectorStore} from "../rag/sqlite-store";
 import type {VectorStore} from "../rag/store";
 
@@ -51,20 +52,25 @@ export function coreRules(): PipeFn {
 - 不要加没被要求的功能
 - 独立的工具调用尽量并行执行
 - 工具调用失败时，换一个思路而不是重复同样的操作
-- 回答要简洁直接`;
+- 回答要简洁直接
+`;
 }
 
 export function toolGuide(): PipeFn {
   return (ctx) => {
     if (ctx.toolCount === 0) return null;
-    return `你有 ${ctx.toolCount} 个工具可用。需要操作本地文件时使用内置工具，需要访问外部服务时使用 MCP 工具。`;
+    return `你当前有 ${ctx.toolCount} 个工具已经激活可直接使用。
+    工具使用准则：
+    - 需要操作本地文件时使用内置工具
+    - 需要访问外部服务时使用 MCP 工具
+    - 涉及多个独立目标的调研、对比任务时，优先使用 spawn_agent 工具并行执行多个子 Agent。`;
   };
 }
 
 export function deferredTools(): PipeFn {
   return (ctx) => {
     if (!ctx.deferredToolSummary) return null;
-    return `如果你需要的工具不在以上列表中，可使用 tool_search 工具搜索延迟加载的工具。${ctx.deferredToolSummary}`;
+    return `如果你需要的工具不在已激活的工具列表中，还存在部分延迟加载的工具可使用。 \n ${ctx.deferredToolSummary}`;
   };
 }
 
@@ -86,4 +92,11 @@ export function ragContext(vectorStore: SqliteVectorStore): (ctx: PromptContext)
     const sources = vectorStore.sources();
     return `[知识库] 已导入 ${size} 个文档片段（来源: ${sources.join(', ')}）。使用 rag_search 工具搜索知识库。`;
   };
+}
+
+export function multiAgentGuide(agentRegistry: SubAgentRegistry): (ctx: PromptContext) => string | null {
+  return () => {
+    return `[子 Agent] 你最多可以使用 spawn_agent 工具并行执行 ${agentRegistry.getConfig().maxConcurrent} 个子 Agent。
+    `;
+  }
 }

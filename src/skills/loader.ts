@@ -56,6 +56,11 @@ export class SkillLoader {
     return Array.from(this.skills.values());
   }
 
+  availableList(): SkillDefinition[] {
+    return this.list()
+      .filter(s => !this.activeSkills.has(s.name))
+  }
+
   get(name: string): SkillDefinition | undefined {
     return this.skills.get(name);
   }
@@ -74,13 +79,13 @@ export class SkillLoader {
 
     const available = this.list()
       .filter(s => !this.activeSkills.has(s.name))
-      .map(s => {
+      .map((s, idx) => {
         const hint = s.whenToUse ? ` (适用场景: ${s.whenToUse})` : '';
-        return `  /${s.name} — ${s.description}${hint}`
+        return `${idx}: ${s.name} — ${s.description}${hint}`
       })
 
     if (available.length > 0) {
-      lines.push('可用的 Skills（输入 /skill load <name> 激活）：');
+      lines.push('**注意**，当使用场景需要时，使用 skill 工具激活下面的 Skills 列表：');
       lines.push(...available);
     }
 

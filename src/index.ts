@@ -8,7 +8,7 @@ import {agentLoop, type BudgetState} from './agent/loop';
 import {allTools} from './tools/index';
 import {MCPClient, MockMCPClient} from './tools/mcp-client';
 import {SessionStore} from './session/store';
-import {coreRules, deferredTools, memoryContext, PromptBuilder, ragContext, sessionContext, toolGuide, type PromptContext} from './context/prompt-builder';
+import {coreRules, deferredTools, memoryContext, multiAgentGuide, PromptBuilder, ragContext, sessionContext, toolGuide, type PromptContext} from './context/prompt-builder';
 import {estimateTokens, microcompact, summarize} from './context/compressor';
 import {applyDefense, estimateMessageTokens, TokenTracker, truncateToolResults, ttlPrune} from './context/defense';
 import {UsageTracker} from './usage/tracker';
@@ -43,6 +43,7 @@ import {SubAgentRegistry} from './multiple-agent/registry';
 import type {SpawnContext} from './multiple-agent/spawn';
 import {createSpawnTool} from './tools/spawn-tools';
 import {createAgentCommands} from './commands/agent';
+import {createSkillTool} from './tools/skill-tools';
 
 const qwen = createOpenAI({
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
@@ -74,9 +75,9 @@ registry.register(...createRagTools(vectorStore, embedFn));
 /** End ----RAG---- End */
 
 /** Start ----Skills---- Start */
-// [TODO]: 实现 skill-tool 给 AI 动态启动卸载 skill
 const skillLoader = new SkillLoader('.');
 skillLoader.load();
+registry.register(createSkillTool(skillLoader))
 skillRepoter(skillLoader)
 /** End ----Skills---- End */
 
@@ -115,35 +116,6 @@ async function connectGithubMCP() {
   const tools = await registry.registerMCPServer('github', mockClient);
   console.log(`  已注册 ${tools.length} 个 Mock MCP 工具`);
 }
-
-/** Start ----SystemPrompt---- Start */
-// Prompt Pipe 组装 system prompt
-// 保持 prompt 前缀不变，计算结果就能复用。不变的 section 放前面，变的放后面：
-// coreRules — 永远不变，放最前面，cache 稳稳命中。
-// toolGuide — 工具数量基本固定，变化很少。
-// deferredTools — 所有的工具列表也基本固定，放中间。
-// sessionContext — 每次启动都不同，放最后面。
-const builder = new PromptBuilder()
-  .pipe('coreRules', coreRules())
-  .pipe('toolGuide', toolGuide())
-  .pipe('deferredTools', deferredTools())
-  .pipe('memoryContext', memoryContext(memoryStore))
-  .pipe('ragContext', ragContext(vectorStore))
-  .pipe('skillContext', () => skillLoader.buildPromptSection())
-  .pipe('sessionContext', sessionContext());
-
-
-// 添加长期记忆后，每轮的 system-prompt 可能会变，改为函数实时构建
-function makePromptCtx(messages: ModelMessage[]): PromptContext {
-  return {
-    toolCount: registry.getActiveTools().length,
-    deferredToolSummary: registry.getDeferredToolSummary(),
-    sessionMessageCount: messages.length,
-    sessionId: 'default',
-  };
-}
-/** End ----SystemPrompt---- End */
-
 
 /** Start ----Hooks---- Start */
 const hookPipeline = new HookPipeline();
@@ -209,13 +181,40 @@ function getSpawnCtx(): SpawnContext {
 }
 
 registry.register(createSpawnTool(agentRegistry, getSpawnCtx));
-
 /** End ----SubAgent---- End */
 
 /** Start ----Plugins---- Start */
 const pluginManager = new PluginManager(registry, gateway, hookPipeline);
 pluginManager.availablePlugins.set('supabase', supabasePlugin)
 /** End ----Plugins---- End */
+
+/** Start ----SystemPrompt---- Start */
+// Prompt Pipe 组装 system prompt
+// 保持 prompt 前缀不变，计算结果就能复用。不变的 section 放前面，变的放后面：
+// coreRules — 永远不变，放最前面，cache 稳稳命中。
+// toolGuide — 工具数量基本固定，变化很少。
+// deferredTools — 所有的工具列表也基本固定，放中间。
+// sessionContext — 每次启动都不同，放最后面。
+const builder = new PromptBuilder()
+  .pipe('coreRules', coreRules())
+  .pipe('multiAgent', multiAgentGuide(agentRegistry))
+  .pipe('toolGuide', toolGuide())
+  .pipe('deferredTools', deferredTools())
+  .pipe('memoryContext', memoryContext(memoryStore))
+  .pipe('ragContext', ragContext(vectorStore))
+  .pipe('skillContext', () => skillLoader.buildPromptSection())
+  .pipe('sessionContext', sessionContext());
+
+// 添加长期记忆后，每轮的 system-prompt 可能会变，改为函数实时构建
+function makePromptCtx(messages: ModelMessage[]): PromptContext {
+  return {
+    toolCount: registry.getActiveTools().length,
+    deferredToolSummary: registry.getDeferredToolSummary(),
+    sessionMessageCount: messages.length,
+    sessionId: 'default',
+  };
+}
+/** End ----SystemPrompt---- End */
 
 /** Start ----Command---- Start */
 const dispatch = createDispatcher([

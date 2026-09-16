@@ -327,7 +327,7 @@ export class ToolRegistry {
       return `  - ${t.name}${hint}`;
     });
 
-    return `\n**注意**，以下工具可用，但需要先通过 tool_search 工具搜索获取完整定义后再调用：\n${lines.join('\n')}`;
+    return `[懒加载工具] **注意**，以下工具可用，但需要**先通过 tool_search 工具搜索获取完整定义后再调用**：\n${lines.join('\n')}`;
   }
   /** End ----延迟加载---- End */
 }
