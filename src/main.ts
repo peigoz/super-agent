@@ -215,6 +215,7 @@ export async function startAgent() {
   for (const pluginCfg of config.plugins) {
     const def = pluginManager.availablePlugins.get(pluginCfg.name);
     if (!def) {console.log(`  ✗ ${pluginCfg.name} — 未知插件`); continue;}
+    if (!pluginCfg.enabled) continue;
     try {
       await pluginManager.load(def);
     } catch {

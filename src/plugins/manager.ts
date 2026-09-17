@@ -154,5 +154,7 @@ export function pluginRepoter(pluginManager: PluginManager) {
       console.log(`    ${p.name} — ${p.tools.join(', ')}`);
     }
     console.log('');
+  } else {
+    console.log(`  所有插件均已禁用`);
   }
 }
