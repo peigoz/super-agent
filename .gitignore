@@ -9,3 +9,4 @@ app/*
 docs
 db
 .cron
+.traces

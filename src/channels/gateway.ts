@@ -57,7 +57,7 @@ export class ChannelGateway {
     messages.push(userMsg);
 
     const system = this.options.buildSystem();
-    await agentLoop(this.options.model, this.options.registry, messages, system);
+    await agentLoop({model: this.options.model, registry: this.options.registry, messages, system});
 
     // 从 messages 里取最后一条 assistant 消息作为回复
     const lastMsg = messages[ messages.length - 1 ];

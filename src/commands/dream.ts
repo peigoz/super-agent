@@ -25,10 +25,10 @@ export const dreamCommands: CommandHandler[] = [
     ctx.timestamps.set(ctx.messages.length - 1, Date.now());
     ctx.sessionStore.append(userMsg);
 
-    const currentSystem = ctx.builder.build(ctx.makePromptCtx());
+    const currentSystem = ctx.builder.build(ctx.makePromptCtx(ctx.messages));
     const beforeLen = ctx.messages.length;
 
-    agentLoop(ctx.model, ctx.registry, ctx.messages, currentSystem, ctx.tracker).then(() => {
+    agentLoop({model: ctx.model, registry: ctx.registry, messages: ctx.messages, system: currentSystem, tracker: ctx.tracker}).then(() => {
       const newMessages = ctx.messages.slice(beforeLen);
       const now = Date.now();
       for (let i = beforeLen; i < ctx.messages.length; i++) ctx.timestamps.set(i, now);

@@ -3,6 +3,7 @@ import {detect, recordCall, recordResult, resetHistory} from '../agent/loop-dete
 import {isRetryable, calculateDelay, sleep} from './retry';
 import type {ToolRegistry} from "../tools/registry";
 import {type UsageTracker, normalizeUsage} from '../usage/tracker';
+import type {LocalTraceRecorder} from "../trace/recorder";
 
 
 const MAX_STEPS = 10;
@@ -15,19 +16,31 @@ export interface BudgetState {
   limit: number;
 }
 
-export async function agentLoop(
+export interface AgentLoopOptions {
   model: any,
   registry: ToolRegistry,
   messages: ModelMessage[],
   system: string,
   tracker?: UsageTracker,
-) {
+  signal?: AbortSignal,
+  trace?: LocalTraceRecorder,
+}
+export async function agentLoop({
+  model,
+  registry,
+  messages,
+  system,
+  tracker,
+  signal,
+  trace,
+}: AgentLoopOptions) {
   let step = 0;
   resetHistory();
 
   while (step < MAX_STEPS) {
     step++;
     console.log(`\n--- Step ${step} ---`);
+    trace?.recordStepStarted({step, system, messages});
 
     let hasToolCall = false;
     let shouldBreak = false;
@@ -39,7 +52,7 @@ export async function agentLoop(
     // 步骤级重试：包裹整个 stream 消费过程
     for (let attempt = 1; ; attempt++) {
       try {
-        const result = streamText({model, system, tools: registry.toAISDKFormat(), messages, maxRetries: 0, onError: () => { }});
+        const result = streamText({model, system, tools: registry.toAISDKFormat(), messages, maxRetries: 0, onError: () => { }, abortSignal: signal, });
 
         for await (const part of result.stream) {
           switch (part.type) {
@@ -82,6 +95,7 @@ export async function agentLoop(
         stepUsage = finalStep.usage;
         break; // 成功完成，跳出重试循环
       } catch (error) {
+        trace?.recordAttemptError(step, attempt, error);
         if (attempt > MAX_RETRIES || !isRetryable(error as Error)) throw error;
         const delay = calculateDelay(attempt);
         console.log(`  [重试] 第 ${attempt}/${MAX_RETRIES} 次失败，${delay}ms 后重试...`);
@@ -107,6 +121,12 @@ export async function agentLoop(
 
     const norm = normalizeUsage(stepUsage);
     const stepRecord = tracker?.record(model?.modelId || 'mock-model', norm);
+    trace?.recordStepCompleted({
+      step,
+      text: fullText,
+      outputMessages: stepResponse.messages,
+      usage: norm,
+    });
 
     // cache 命中时才打印一行简洁状态，让 cache hit 立刻可见
     if (stepRecord && (norm.cacheReadTokens > 0 || norm.cacheWriteTokens > 0)) {

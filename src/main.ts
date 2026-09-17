@@ -47,6 +47,7 @@ import {loadConfig} from './config/loader';
 import type {SuperAgentConfig} from './config/schema';
 import {connectGithubMCP} from './tools/github-mcp';
 import {chunkDocument} from './rag/chunker';
+import {LocalTraceRecorder} from './trace/recorder';
 
 // 加载配置
 const config = loadConfig();
@@ -232,7 +233,7 @@ export async function startAgent() {
     runAgentPrompt: async (prompt, _timeout) => {
       const cronMessages: ModelMessage[] = [ {role: 'user', content: prompt} ];
       const system = builder.build(makePromptCtx(messages));
-      await agentLoop(model, registry, cronMessages, system);
+      await agentLoop({model, registry, messages: cronMessages, system});
       const lastMsg = cronMessages[ cronMessages.length - 1 ];
       if (!lastMsg) return '(无输出)';
       if (typeof lastMsg.content === 'string') return lastMsg.content;
@@ -309,8 +310,21 @@ export async function startAgent() {
 
       const currentSystem = builder.build(makePromptCtx(messages));
       const beforeLen = messages.length;
+      const trace = await LocalTraceRecorder.start({
+        sessionId: config.session.id,
+        model: model?.modelId || config.model.name,
+      });
 
-      await agentLoop(model, registry, messages, currentSystem, tracker);
+      try {
+        await agentLoop({model, registry, messages, system: currentSystem, tracker, trace});
+        await trace.finish('completed');
+        console.log(`  [Trace] ${trace.filePath}`);
+      } catch (error) {
+        await trace.finish('failed', error);
+        console.error(`  [Agent] ${error instanceof Error ? error.message : String(error)}`);
+        ask();
+        return;
+      }
 
       // 持久化本轮新增的消息（agent loop 会往 messages 里 push assistant/tool 消息）
       const newMessages = messages.slice(beforeLen);
