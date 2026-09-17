@@ -1,9 +1,16 @@
 import {generateText, type ModelMessage} from 'ai';
 import {textToolResultOutput, toolResultOutputToText} from './tool-result-output';
 
+// Agent 上下文窗口 200K
+export const CONTEXT_WINDOW = 200_000;
+const DEFAULT_THRESHOULD = {
+  contextBudgetChars: Math.floor(CONTEXT_WINDOW * 0.75 * 4), // 75% of window, 4 chars/token
+  maxContextBudgetChars: Math.floor(CONTEXT_WINDOW * 0.87 * 4), // 87% of window, 4 chars/token
+  keepRecentMessages: 10 // 会话列表低于10条会话不触发压缩
+};
 
 /** Estimate token count: ~4 chars per token for mixed Chinese/English. */
-function estimateTokens(messages: ModelMessage[]): number {
+export function estimateTokens(messages: ModelMessage[]): number {
   let chars = 0;
   for (const msg of messages) {
     if (typeof msg.content === 'string') {
@@ -100,10 +107,6 @@ const COMPRESS_PROMPT = `你是一个对话压缩系统。你的任务是把 Age
 - 文件路径、UUID、版本号等标识符必须原样保留，不要翻译或改写
 - 不要写笼统的概述，只保留具体的、可操作的信息
 - 总长度控制在 800 字以内`;
-
-const CONTEXT_TOKEN_THRESHOLD = 300;
-const KEEP_RECENT_MESSAGES = 6;
-
 export interface CompactionResult {
   messages: ModelMessage[];
   summary: string;
@@ -116,11 +119,11 @@ export async function summarize(
   existingSummary?: string,
 ): Promise<CompactionResult> {
   const tokenEstimate = estimateTokens(messages);
-  if (tokenEstimate < CONTEXT_TOKEN_THRESHOLD || messages.length <= KEEP_RECENT_MESSAGES) {
+  if (tokenEstimate < DEFAULT_THRESHOULD.maxContextBudgetChars || messages.length <= DEFAULT_THRESHOULD.keepRecentMessages) {
     return {messages, summary: existingSummary || '', compressedCount: 0};
   }
 
-  const splitIdx = Math.max(0, messages.length - KEEP_RECENT_MESSAGES);
+  const splitIdx = Math.max(0, messages.length - DEFAULT_THRESHOULD.keepRecentMessages);
 
   // 对齐到 user 消息边界——切分点一定不能落在 assistant 或 tool 消息上，否则保留的消息列表会以非 user 开头，很多 LLM API 会报错。
   // 注意要从切分点往前找到最近的 user 消息再切。
@@ -184,4 +187,24 @@ export async function summarize(
   }
 }
 
-export {estimateTokens};
+// 整个防御体系的执行顺序是：截断（Layer 2）→ TTL 修剪（Layer 3）→ Token 估算（Layer 1，判断是否需要 LLM 压缩）→ 如果需要，触发 Microcompact → 如果还不够，触发 Summarization。
+// 采用软删除 + LLM 压缩历史对话的策略，LLM 压缩只在即时防线不够用的时候才触发：
+export async function compresssor(model: any, messages: ModelMessage[], summary: string): Promise<string> {
+  // Check if compaction needed after each turn
+  const currentTokens = estimateTokens(messages);
+
+  if (currentTokens > DEFAULT_THRESHOULD.contextBudgetChars) {
+    console.log(`\n  [压缩检查] ~${currentTokens} tokens, 触发压缩...`);
+    const mc2 = microcompact(messages);
+    messages = mc2.messages;
+    if (mc2.cleared > 0) console.log(`  [Microcompact] 清理了 ${mc2.cleared} 个工具结果`);
+
+    const comp2 = await summarize(model, messages, summary);
+    if (comp2.compressedCount > 0) {
+      messages = comp2.messages;
+      summary = comp2.summary;
+      console.log(`  [Summarization] 压缩了 ${comp2.compressedCount} 条消息, ~${estimateTokens(messages)} tokens`);
+    }
+  }
+  return summary;
+}

@@ -2,8 +2,6 @@ import fs from 'node:fs';
 import type {ToolDefinition} from './registry';
 import {chunkDocument} from '../rag/chunker';
 import {embed, type EmbeddingFn} from '../rag/embedder';
-import {VectorStore} from '../rag/store';
-import {hybridSearch} from '../rag/search';
 import {SqliteVectorStore} from '../rag/sqlite-store';
 
 export function createRagTools(vectorStore: SqliteVectorStore, embedFn: EmbeddingFn): ToolDefinition[] {

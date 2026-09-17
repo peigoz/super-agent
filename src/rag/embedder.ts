@@ -12,6 +12,7 @@ export function createMockEmbedder(): EmbeddingFn {
 }
 
 export function createDashScopeEmbedder(apiKey: string): EmbeddingFn {
+  if (!apiKey) return createMockEmbedder();
   return async (texts: string[]) => {
     const resp = await fetch(
       'https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings',

@@ -1,7 +1,9 @@
 import type {CommandHandler} from './index';
 import type {CronService} from '../cron/service';
 
-export function createCronCommands(cronService: CronService): CommandHandler[] {
+export function createCronCommands(cronService?: CronService): CommandHandler[] {
+  if (!cronService) return []
+
   const handler: CommandHandler = (cmd) => {
     if (!cmd.startsWith('/cron')) return false;
     const sub = cmd.slice(5).trim();

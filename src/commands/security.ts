@@ -8,9 +8,9 @@ export function createSecurityCommands(
   hookPipeline: HookPipeline,
 ): CommandHandler[] {
   return [
-  // /role [owner|collaborator|guest]
+    // /role [owner|developer|guest]
     (cmd, _ctx) => {
-      const match = cmd.match(/^\/role(?:\s+(owner|collaborator|guest))?$/);
+      const match = cmd.match(/^\/role(?:\s+(owner|developer|guest))?$/);
       if (!match) return false;
 
       if (match[ 1 ]) {

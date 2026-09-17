@@ -1,9 +1,14 @@
 {
   "name": "super-agent",
+  "version": "0.0.1",
   "type": "module",
+  "bin": {
+    "super-agent": "src/index.ts"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
+    "init": "tsx src/index.ts init",
     "continue": "tsx src/index.ts --continue"
   },
   "dependencies": {
@@ -17,7 +22,8 @@
     "hono": "^4.13.7",
     "mrmime": "^2.0.1",
     "sqlite-vec": "^0.1.9",
-    "turndown": "^7.2.4"
+    "turndown": "^7.2.4",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@ai-sdk/provider": "4.0.8",

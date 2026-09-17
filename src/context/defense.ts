@@ -1,5 +1,6 @@
 import type {ModelMessage} from 'ai';
 import {textToolResultOutput, toolResultOutputToText} from './tool-result-output';
+import {CONTEXT_WINDOW} from './compressor';
 
 
 // 采用入口管理压缩策略，在工具输出时就开始管制
@@ -45,9 +46,6 @@ export class TokenTracker {
     };
   }
 }
-
-// Agent 上下文窗口 200K
-const CONTEXT_WINDOW = 200_000;
 
 function countMessageChars(message: ModelMessage): number {
   let chars = 0;

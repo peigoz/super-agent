@@ -85,7 +85,9 @@ export function memoryContext(memoryStore: MemoryStore): (ctx: PromptContext) =>
   return () => memoryStore.buildPromptSection();
 }
 
-export function ragContext(vectorStore: SqliteVectorStore): (ctx: PromptContext) => string | null {
+export function ragContext(vectorStore?: SqliteVectorStore): (ctx: PromptContext) => string | null {
+  if (!vectorStore) return () => null
+
   return () => {
     const size = vectorStore.size();
     if (size === 0) return null;

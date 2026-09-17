@@ -2,21 +2,19 @@ import fs from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
-import type {Chunk} from './chunker';
+import {chunkDocument, type Chunk} from './chunker';
 import type {StoredChunk} from './store';
 import type {EmbeddingFn} from './embedder';
 import {mmrSelect, type SearchResult} from './search';
 import {embed} from './embedder';
 
-const STORE_DIR = 'db'
-
 export class SqliteVectorStore {
   private db: Database.Database;
 
-  constructor(dbFilename: string = 'knowledge.db') {
+  constructor(dbFilename: string = 'knowledge.db', storeDir: string = 'db') {
     // 用 resolve 而非 join：外部传绝对路径时能正确覆盖 baseDir，
     // join 会把 '/tmp/x.db' 拼成 'db/tmp/x.db' 这种意外路径
-    const dbPath = path.resolve(STORE_DIR, dbFilename);
+    const dbPath = path.resolve(storeDir, dbFilename);
     // better-sqlite3 不会自动建父目录，目录不存在时会直接报 unable to open database file
     fs.mkdirSync(path.dirname(dbPath), {recursive: true});
     this.db = new Database(dbPath);
@@ -214,4 +212,22 @@ function normalizeMinMax(scores: number[]): number[] {
   const max = Math.max(...scores);
   const range = max - min || 1;
   return scores.map(s => (s - min) / range);
+}
+
+export async function makeRagByDir({dir, vectorStore, embedFn}: {dir: string, vectorStore: SqliteVectorStore, embedFn: EmbeddingFn}) {
+  if (fs.existsSync(dir)) {
+    const files = fs.readdirSync(dir).filter(f => f.endsWith('.md'));
+    if (files.length > 0) {
+      console.log(`  发现 ${files.length} 个文档，自动导入知识库...`);
+      for (const f of files) {
+        const path = `docs/${f}`;
+        const text = fs.readFileSync(path, 'utf-8');
+        const chunks = chunkDocument(path, text);
+        const embeddings = await embed(embedFn, chunks.map(c => c.text));
+        vectorStore.addBatch(chunks.map((c, i) => ({chunk: c, embedding: embeddings[ i ]})));
+        console.log(`    ${f} → ${chunks.length} 个片段`);
+      }
+      console.log(`  知识库就绪，共 ${vectorStore.size()} 个片段\n`);
+    }
+  }
 }

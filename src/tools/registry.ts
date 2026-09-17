@@ -35,7 +35,7 @@ export class ToolRegistry {
   // 工具动态加载
   private activeProfile: string = 'full';
   private discoveredTools = new Set<string>();
-  private currentRole: Role = 'owner';
+  private currentRole: Role = 'guest';
   private hookPipeline?: HookPipeline;
 
   register(...tools: ToolDefinition[]): void {

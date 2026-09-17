@@ -1,4 +1,4 @@
-export type Role = 'owner' | 'collaborator' | 'guest';
+export type Role = 'owner' | 'developer' | 'guest';
 
 export interface UserIdentity {
   id: string;
@@ -11,7 +11,7 @@ const TOOL_ACCESS: Record<Role, {allow: string[] | '*'; deny: string[]}> = {
     allow: '*',
     deny: [],
   },
-  collaborator: {
+  developer: {
     allow: '*',
     deny: [ 'bash' ],
   },
