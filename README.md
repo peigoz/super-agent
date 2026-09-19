@@ -66,7 +66,7 @@ pnpm trace:inspect
 
 ## 项目结构
 
-```
+```txt
 src/
 ├── index.ts            # bin 入口：init 子命令 或 启动 agent
 ├── main.ts             # 组装中枢：各子系统初始化 + REPL 主循环
